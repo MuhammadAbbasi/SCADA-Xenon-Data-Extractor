@@ -190,6 +190,137 @@ Output: `05_Tracker_Report_PDF/`
 
 ---
 
+## Guida Utente (Italiano)
+
+### Avvio dell'applicazione
+
+Avviare il programma eseguendo `tracker_suite_v2.10_OPTIMIZED.py` oppure il file `.exe` compilato.
+All'avvio comparira' la finestra principale **GET - SCADA Tracker Suite**.
+
+### Configurazione iniziale
+
+Prima di qualsiasi operazione impostare:
+
+- **Root Folder** - cartella radice del progetto (percorso predefinito: `//S01/get/2025.01 Mazara 01 A2A/...`). Cliccare **Browse** per cambiarla.
+- **Date Selection** - selezionare anno, mese e giorno tramite i selettori numerici. La data indica il giorno di cui si vuole elaborare i dati.
+
+Dopo aver impostato la data, cliccare **Refresh Status** per aggiornare lo stato dei pulsanti. I pulsanti si colorano automaticamente in base ai dati disponibili:
+
+| Colore | Significato |
+|---|---|
+| Grigio | Dati del passaggio non ancora disponibili |
+| Azzurro | Passaggio pronto per essere eseguito |
+| Verde | Passaggio gia' completato con successo |
+| Giallo | Step 3 (Overview) disponibile |
+| Arancione/Rosso | Export PDF completo disponibile |
+| Blu | Export PDF campione disponibile |
+
+---
+
+### Pipeline - Passaggi in ordine
+
+#### Passo 1 - EXTRACT
+
+Legge i file CSV grezzi esportati dal SCADA (cartella `01_Original_files/YYYY/MM/DD/`).
+Estrae solo le colonne **Angolo Target** e **Angolo Attuale** per ogni tracker.
+I file `.txt` vengono rinominati automaticamente in `.csv` se presenti.
+Output salvato in `02_DownSampled_Files/YYYY/MM/DD/`.
+
+> Attenzione: durante l'estrazione non cliccare altri pulsanti. Il log mostrera' "per favore non cliccare piu... aspetti" per ogni file in elaborazione.
+
+#### Passo 2 - MERGE
+
+Legge tutti i file estratti e li unisce in un unico CSV ricampionato a **1 minuto** di risoluzione.
+I dati vengono elaborati a batch per ridurre l'uso di memoria RAM.
+Output: `03_Merged_files/YYYY/MM/{data}_1min_merged.csv`
+
+Una volta completato il merge, i passi 3, 4, 5, 6 e 7 diventano disponibili.
+
+#### Passo 3 - GENERATE OVERVIEW (Merged)
+
+Genera grafici panoramici ad alta risoluzione (1800 dpi) dal file merged:
+- Un grafico con **tutti i tracker** sovrapposti
+- Un grafico separato per ogni **NCU** (Node Control Unit)
+- Un file CSV con tutti i tracker che hanno registrato un angolo sotto la soglia di **28 gradi**
+
+Output salvato in `04_Tracker_plots_angles/YYYY/MM/DD/`.
+
+#### Passo 4 - GENERATE INDIVIDUAL PLOTS
+
+Genera un grafico PNG individuale per ogni coppia **NCU-TCU**, con:
+- Curva blu: angolo target
+- Curva rossa: angolo attuale
+- Box con valori Min/Max dell'angolo attuale
+
+I grafici vengono salvati in `04_Tracker_plots_angles/YYYY/MM/DD/each_tracker_plots/` con nome `TX_{NCU}_TCU_{TCU}.png`.
+
+> Questo passo puo' richiedere diversi minuti in base al numero di tracker (tipicamente 370+).
+
+#### Passo 5 - RUN HEALTH CHECK
+
+Analisi rapida di tutti i tracker per rilevare anomalie. Vengono segnalati quattro tipi di problemi:
+
+| Tipo | Severita' | Condizione |
+|---|---|---|
+| DATA LOSS | Alta | Meno di 10 punti dati registrati |
+| STUCK | Critica | Il target si muove ma l'angolo attuale rimane fisso |
+| DEVIATION | Media | Differenza media tra target e attuale superiore a 20° |
+| LOW ANGLE | Alta | Angolo attuale minimo inferiore a 28° |
+
+I risultati appaiono nella scheda **Health Dashboard**.
+Fare **doppio click** su una riga per aprire il grafico del tracker corrispondente.
+Se il file PNG non e' stato ancora generato, il grafico viene calcolato e visualizzato in tempo reale in una finestra popup.
+
+#### Passo 6 - EXPORT FULL PDF REPORT
+
+Genera un PDF completo contenente:
+1. I grafici di panoramica (Overview) per tutti gli NCU
+2. Una pagina per ogni tracker (NCU-TCU) con grafico angolo vs tempo
+
+Output: `05_Tracker_Report_PDF/YYYY/MM/Tracker_Report_{data}.pdf`
+
+> Attenzione: con 370+ tracker questo processo puo' richiedere diversi minuti e genera un file PDF di grandi dimensioni.
+
+#### Passo 7 - EXPORT RANDOM PDF
+
+Genera un PDF campione piu' leggero contenente:
+1. I grafici di panoramica
+2. **5 TCU scelti casualmente** per ogni NCU
+
+Utile per una verifica rapida senza generare il report completo.
+Output: `05_Tracker_Report_PDF/YYYY/MM/Tracker_Random_Sample_{data}.pdf`
+
+---
+
+### Scheda Health Dashboard
+
+Mostra la tabella degli errori rilevati dallo Step 5 con colonne: NCU, TCU, Tipo, Severita', Dettagli.
+- Righe **rosse** = problemi critici (STUCK)
+- Righe **arancioni** = problemi di alta severita' (DATA LOSS, LOW ANGLE)
+- Doppio click su una riga apre il grafico del tracker in una finestra separata
+
+---
+
+### Struttura delle cartelle dati
+
+```
+Root Folder/
+├── 01_Original_files/YYYY/MM/DD/    # File CSV grezzi dal SCADA
+├── 02_DownSampled_Files/YYYY/MM/DD/ # File estratti (solo angoli)
+├── 03_Merged_files/YYYY/MM/         # File merged a 1 minuto
+├── 04_Tracker_plots_angles/YYYY/MM/DD/
+│   ├── NCU_TCU_{data}_ALL.png       # Overview tutti i tracker
+│   ├── NCU_TCU_{data}_NCU1.png      # Overview NCU 1
+│   ├── NCU_TCU_{data}_below_28deg.csv
+│   └── each_tracker_plots/
+│       └── TX_{NCU}_TCU_{TCU}.png
+└── 05_Tracker_Report_PDF/YYYY/MM/
+    ├── Tracker_Report_{data}.pdf
+    └── Tracker_Random_Sample_{data}.pdf
+```
+
+---
+
 ## Notes
 
 - Data folders (`01_` through `05_`) are excluded from version control (see `.gitignore`) - total raw data is ~2.1 TB
