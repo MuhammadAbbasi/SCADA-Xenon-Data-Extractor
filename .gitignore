@@ -48,6 +48,13 @@ credentials.txt
 
 # Legacy and archived code - not part of active codebase
 .Test_old_code/
+.test_data/
+
+# Non-automation utility and debug files in auto-downloader
+00_Auto_Downloader/capture_assets.py
+00_Auto_Downloader/configuration_file.py
+00_Auto_Downloader/debug_*.py
+00_Auto_Downloader/test_*.py
 
 # Debug screenshots and automation assets (contain screen captures)
 00_Auto_Downloader/debug_screenshots/
