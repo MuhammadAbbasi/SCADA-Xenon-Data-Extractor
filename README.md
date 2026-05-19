@@ -339,4 +339,4 @@ Root Folder/
 
 ## License
 
-Internal project - A2A / a176lab.it. Not for public redistribution.
+Internal project - Not for public redistribution.
