@@ -1,0 +1,76 @@
+# Data folders - excluded due to large file sizes (2+ TB total)
+01_Original_files/
+02_DownSampled_Files/
+03_Merged_files/
+04_Tracker_plots_angles/
+05_Tracker_Report_PDF/
+
+# Compiled executables
+*.exe
+*.pkg
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Data file types
+*.csv
+*.xlsx
+*.xls
+*.png
+*.jpg
+*.jpeg
+*.pdf
+
+# Office documents
+*.docx
+*.doc
+*.pptx
+*.ppt
+
+# Credentials and secrets
+credentials.txt
+*credentials*
+*.env
+.env*
+
+# Logs
+*.log
+*.txt
+
+# Legacy and archived code - not part of active codebase
+.Test_old_code/
+
+# Debug screenshots and automation assets (contain screen captures)
+00_Auto_Downloader/debug_screenshots/
+00_Auto_Downloader/assets/
+
+# Windows system files
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Jupyter notebooks (output cells can contain large data)
+*.ipynb
+
+# PowerShell scripts (site-specific automation)
+*.ps1
+
+# Temporary files
+*.tmp
+*.bak
+~$*
