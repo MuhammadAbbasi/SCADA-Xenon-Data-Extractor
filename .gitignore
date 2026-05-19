@@ -30,6 +30,11 @@ __pycache__/
 *.jpeg
 *.pdf
 
+# Allow documentation images in docs/ folder
+!docs/
+!docs/*.png
+!docs/*.jpg
+
 # Office documents
 *.docx
 *.doc

@@ -12,6 +12,27 @@ The system automates the full data pipeline:
 SCADA Web Client -> Auto-Download -> Raw CSV -> Downsample -> Merge -> Plot -> PDF Report
 ```
 
+## GUI Overview
+
+![GET - SCADA Tracker Suite GUI](docs/gui_overview.png)
+
+| Area | Label | Description |
+|---|---|---|
+| A | Configuration | Set the Root Folder path and the analysis date (year/month/day spinboxes). Click **Browse** to change folder or **Refresh Status** to re-check which steps are ready. |
+| B | 1. EXTRACT | Reads raw semicolon-delimited CSVs from `01_Original_files/`, filters `Angolo Target` and `Angolo Attuale` columns, and saves cleaned files to `02_DownSampled_Files/`. Auto-renames `.txt` exports to `.csv`. |
+| C | 2. MERGE | Combines all extracted files for the selected date into a single 1-minute resampled CSV saved to `03_Merged_files/`. Processed in memory-optimised batches. |
+| D | 3. GENERATE OVERVIEW | Generates high-resolution (1800 dpi) angle overview plots for all trackers combined and per NCU group. Also exports a CSV of trackers below the 28-degree threshold. |
+| E | 4. GENERATE INDIVIDUAL PLOTS | Produces one PNG plot per NCU-TCU pair showing target vs actual angle with Min/Max annotation. Saved to `each_tracker_plots/` subfolder. |
+| F | 5. RUN HEALTH CHECK | Fast analysis across all trackers detecting: DATA LOSS, STUCK trackers, DEVIATION above 20 degrees, and LOW ANGLE below 28 degrees. Results appear in the Health Dashboard tab. |
+| G | 6. EXPORT FULL PDF REPORT | Compiles a full PDF with all overview images followed by one page per tracker. Can exceed 370 pages depending on the site. |
+| H | 7. EXPORT RANDOM PDF | Lighter PDF with overview images plus 5 randomly sampled TCUs per NCU. Useful for quick spot-checks. |
+| I | Console Output | Live log of all processing activity. Errors and progress counters appear here during each step. |
+| J | Health Dashboard tab | Table of issues found by Step 5. Double-click any row to open that tracker's angle plot. |
+
+> Button colors reflect pipeline status: grey = not ready, light blue = ready, green = completed, yellow = Step 3 ready, orange/red = PDF export ready.
+
+---
+
 Two companion applications handle distinct responsibilities:
 
 | Application | File | Status | Purpose |
@@ -109,20 +130,6 @@ python 00_Auto_Downloader/scada_automation_gui.py
 - Set the target date range
 - Ensure the SCADA Xenon Web Client is open and visible on screen
 - Start the automated download sequence
-
----
-
-## Site Configuration
-
-| Parameter | Value |
-|---|---|
-| Site | Mazara del Vallo, Sicily |
-| Latitude | 37.7717 N |
-| Longitude | 12.6304 E |
-| Timezone | Europe/Rome |
-| Client | A2A (2025.01 project) |
-
-Solar position calculations (sunrise/sunset filtering) use these coordinates via the `astral` library.
 
 ---
 
