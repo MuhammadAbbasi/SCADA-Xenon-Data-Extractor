@@ -530,123 +530,219 @@ def worker_generate_multiday_plots(base, start_date, end_date, selected_ncus, ou
     return "No plots were generated (check NCU selection and data availability)."
 
 
-def worker_generate_official_report(base, date_str, template_path, output_path):
-    """Button 8: Generate official DOCX report from template."""
+def worker_generate_official_report(base, date_str, template_path, output_path, sample_n=0):
+    """
+    Generate official DOCX report matching the PDF template style.
+    sample_n=0 -> full report (all trackers)
+    sample_n>0 -> sample report (sample_n random TCUs per NCU)
+
+    Page layout:
+      Front matter : A4 portrait  (21.0 x 29.7 cm)
+      NCU overviews: Wide landscape (42.0 x 15.0 cm)  - Allegato A
+      Tracker plots : A4 landscape  (29.7 x 21.0 cm)  - Allegato B
+    """
     try:
         from docx import Document
         from docx.shared import Cm
-        from docx.enum.text import WD_BREAK
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        import random as rnd
     except ImportError:
         return "Error: python-docx not installed. Run: pip install python-docx"
 
-    print(f"[REPORT] Building official report for {date_str}...", flush=True)
+    # ---- helpers ----
+    def _tw(cm_val):
+        """Centimetres to twips (Word internal unit: 1 inch = 1440 twips)."""
+        return int(round(cm_val * 1440 / 2.54))
+
+    def _set_para_section(para, w_cm, h_cm, mt=1.5, mb=1.5, ml=1.5, mr=1.5):
+        """
+        Embed a <w:sectPr> in this paragraph's <w:pPr>.
+        In Word semantics this CLOSES the current section: all paragraphs from
+        the previous sectPr up to and including this one use w_cm x h_cm.
+        The NEXT section starts from the following paragraph.
+        """
+        pPr = para._element.get_or_add_pPr()
+        for old in pPr.findall(qn('w:sectPr')):
+            pPr.remove(old)
+        s = OxmlElement('w:sectPr')
+        pgSz = OxmlElement('w:pgSz')
+        pgSz.set(qn('w:w'), str(_tw(w_cm)))
+        pgSz.set(qn('w:h'), str(_tw(h_cm)))
+        if w_cm > h_cm:
+            pgSz.set(qn('w:orient'), 'landscape')
+        s.append(pgSz)
+        pgMar = OxmlElement('w:pgMar')
+        pgMar.set(qn('w:top'),    str(_tw(mt)))
+        pgMar.set(qn('w:right'),  str(_tw(mr)))
+        pgMar.set(qn('w:bottom'), str(_tw(mb)))
+        pgMar.set(qn('w:left'),   str(_tw(ml)))
+        pgMar.set(qn('w:header'), str(_tw(0.5)))
+        pgMar.set(qn('w:footer'), str(_tw(0.5)))
+        pgMar.set(qn('w:gutter'), '0')
+        s.append(pgMar)
+        pPr.append(s)
+
+    def _set_body_section(w_cm, h_cm, mt=1.5, mb=1.5, ml=1.5, mr=1.5):
+        """Update the body-level <w:sectPr> (governs the final / only remaining section)."""
+        body = doc.element.body
+        s = body.find(qn('w:sectPr'))
+        if s is None:
+            s = OxmlElement('w:sectPr')
+            body.append(s)
+        pgSz = s.find(qn('w:pgSz'))
+        if pgSz is None:
+            pgSz = OxmlElement('w:pgSz')
+            s.insert(0, pgSz)
+        pgSz.set(qn('w:w'), str(_tw(w_cm)))
+        pgSz.set(qn('w:h'), str(_tw(h_cm)))
+        if w_cm > h_cm:
+            pgSz.set(qn('w:orient'), 'landscape')
+        else:
+            pgSz.attrib.pop(qn('w:orient'), None)
+        pgMar = s.find(qn('w:pgMar'))
+        if pgMar is None:
+            pgMar = OxmlElement('w:pgMar')
+            s.append(pgMar)
+        pgMar.set(qn('w:top'),    str(_tw(mt)))
+        pgMar.set(qn('w:right'),  str(_tw(mr)))
+        pgMar.set(qn('w:bottom'), str(_tw(mb)))
+        pgMar.set(qn('w:left'),   str(_tw(ml)))
+
+    def _insert_image(anchor, img_path, w_cm):
+        """Add an image paragraph immediately after anchor. Returns the new paragraph."""
+        ip = doc.add_paragraph()
+        ip.alignment = 1
+        run = ip.add_run()
+        try:
+            run.add_picture(img_path, width=Cm(w_cm))
+        except Exception:
+            run.text = f"[Image unavailable: {os.path.basename(img_path)}]"
+        anchor._element.addnext(ip._element)
+        return ip
+
+    # ---- page geometry ----
+    # NCU overview: very wide narrow landscape (mimics the PDF template 38.1x10.2cm but taller for margins)
+    NCU_W, NCU_H   = 42.0, 15.0   # cm  (A3-width wide landscape)
+    NCU_IMG_W      = 38.5          # cm  image width inside NCU page
+    NCU_MARGIN     = (1.0, 1.75, 1.0, 1.75)  # mt, mb, ml, mr
+
+    # Tracker: A4 landscape
+    TRK_W, TRK_H   = 29.7, 21.0   # cm
+    TRK_IMG_W      = 26.0          # cm  image width inside A4 landscape
+    TRK_MARGIN     = (1.5, 1.5, 1.5, 1.5)
+
+    print(f"[REPORT] Building {'sample' if sample_n else 'full'} report for {date_str}...", flush=True)
 
     try:
         dt = datetime.strptime(date_str, "%Y-%m-%d")
-        dd = dt.strftime("%d")
-        mm = dt.strftime("%m")
-        yyyy = dt.strftime("%Y")
+        dd, mm_s, yyyy = dt.strftime("%d"), dt.strftime("%m"), dt.strftime("%Y")
         mmmm = ITALIAN_MONTHS[dt.month]
         mese_str = f"{mmmm} {yyyy}"
 
         replacements = {
-            "MESE 2026": mese_str,
-            "MESE 2025": mese_str,
-            "DD/MM/YYYY": f"{dd}/{mm}/{yyyy}",
+            "MESE 2026": mese_str, "MESE 2025": mese_str,
+            "DD/MM/YYYY": f"{dd}/{mm_s}/{yyyy}",
             "(DD MMMM 2026)": f"({dd} {mmmm} {yyyy})",
             "(DD MMMM 2025)": f"({dd} {mmmm} {yyyy})",
             "DD MMMM YYYY": f"{dd} {mmmm} {yyyy}",
-            "MMMM": mmmm,
-            "YYYY": yyyy,
-            "DD": dd,
-            "MM": mm,
+            "MMMM": mmmm, "YYYY": yyyy, "DD": dd, "MM": mm_s,
         }
 
         shutil.copy2(template_path, output_path)
         doc = Document(output_path)
 
-        def replace_in_para(para):
+        def repl_para(para):
             if not para.runs:
                 return
             full = "".join(r.text for r in para.runs)
             new = full
-            for old, new_val in replacements.items():
-                new = new.replace(old, new_val)
+            for old, nv in replacements.items():
+                new = new.replace(old, nv)
             if new != full:
                 para.runs[0].text = new
                 for r in para.runs[1:]:
                     r.text = ""
 
         for para in doc.paragraphs:
-            replace_in_para(para)
-        for table in doc.tables:
-            for row in table.rows:
+            repl_para(para)
+        for tbl in doc.tables:
+            for row in tbl.rows:
                 for cell in row.cells:
                     for para in cell.paragraphs:
-                        replace_in_para(para)
+                        repl_para(para)
 
-        # Find anchors
-        allegato_a_anchor = None
-        allegato_b_anchor = None
-        for para in doc.paragraphs:
-            t = para.text.strip()
-            if t == "Riepilogo complessivo":
-                allegato_a_anchor = para
-            if t == "Riepilogo di ogni tracker":
-                allegato_b_anchor = para
+        allegato_a_anchor = next((p for p in doc.paragraphs if p.text.strip() == "Riepilogo complessivo"), None)
+        allegato_b_anchor = next((p for p in doc.paragraphs if p.text.strip() == "Riepilogo di ogni tracker"), None)
 
         y, m = date_str[:4], date_str[5:7]
         overview_dir = os.path.join(base, "04_Tracker_plots_angles", y, m, date_str)
-        plots_dir = os.path.join(overview_dir, "each_tracker_plots")
+        plots_dir    = os.path.join(overview_dir, "each_tracker_plots")
 
-        def insert_image_after(anchor_para, img_path):
-            pb_para = doc.add_paragraph()
-            pb_para.add_run().add_break(WD_BREAK.PAGE)
-            anchor_para._element.addnext(pb_para._element)
-
-            img_para = doc.add_paragraph()
-            img_para.alignment = 1  # centered
-            img_run = img_para.add_run()
-            try:
-                img_run.add_picture(img_path, width=Cm(17.0))
-            except Exception:
-                img_run.text = f"[Image unavailable: {os.path.basename(img_path)}]"
-            pb_para._element.addnext(img_para._element)
-            return img_para
-
-        # Allegato A: overview summary images
+        # ---- Allegato A: NCU overview images (wide landscape section) ----
         if allegato_a_anchor:
-            last = allegato_a_anchor
-            for sfx in ["ALL", "NCU1", "NCU2", "NCU3"]:
-                img_path = os.path.join(overview_dir, f"NCU_TCU_{date_str}_{sfx}.png")
-                if os.path.exists(img_path):
-                    last = insert_image_after(last, img_path)
-                    print(f"[REPORT] Added overview: {sfx}", flush=True)
-                else:
-                    print(f"[REPORT] Missing overview image: {sfx}", flush=True)
-        else:
-            print("[REPORT] Warning: 'Riepilogo complessivo' anchor not found.", flush=True)
+            # This sectPr closes the A4-portrait section at "Riepilogo complessivo"
+            _set_para_section(allegato_a_anchor, 21.0, 29.7, mt=2.0, mb=2.0, ml=2.5, mr=2.0)
 
-        # Allegato B: individual tracker pages
+            last = allegato_a_anchor
+            ncu_added = 0
+            for sfx in ["ALL", "NCU1", "NCU2", "NCU3"]:
+                img = os.path.join(overview_dir, f"NCU_TCU_{date_str}_{sfx}.png")
+                if os.path.exists(img):
+                    last = _insert_image(last, img, NCU_IMG_W)
+                    ncu_added += 1
+                    print(f"[REPORT] Added NCU overview: {sfx}", flush=True)
+                else:
+                    print(f"[REPORT] Missing NCU overview: {sfx}", flush=True)
+
+            # Close the wide-landscape section at the last NCU image
+            if ncu_added:
+                _set_para_section(last, NCU_W, NCU_H,
+                                  mt=NCU_MARGIN[0], mb=NCU_MARGIN[1],
+                                  ml=NCU_MARGIN[2], mr=NCU_MARGIN[3])
+        else:
+            print("[REPORT] Warning: 'Riepilogo complessivo' not found.", flush=True)
+
+        # ---- Allegato B: tracker images (A4 landscape section) ----
         if allegato_b_anchor:
-            def sort_key(path):
+            def _sort_key(path):
                 n = re.search(r"TX_(\d+)_TCU_(\d+)", os.path.basename(path))
                 return (int(n.group(1)), int(n.group(2))) if n else (999, 999)
 
-            img_files = sorted(glob.glob(os.path.join(plots_dir, "TX_*.png")), key=sort_key)
+            all_files = sorted(glob.glob(os.path.join(plots_dir, "TX_*.png")), key=_sort_key)
+
+            if sample_n > 0:
+                by_ncu = {}
+                for f in all_files:
+                    n = re.search(r"TX_(\d+)_TCU_", os.path.basename(f))
+                    if n:
+                        by_ncu.setdefault(int(n.group(1)), []).append(f)
+                img_files = []
+                for ncu_id in sorted(by_ncu):
+                    pool = by_ncu[ncu_id]
+                    img_files.extend(sorted(rnd.sample(pool, min(sample_n, len(pool))), key=_sort_key))
+            else:
+                img_files = all_files
+
             total = len(img_files)
-            print(f"[REPORT] Adding {total} tracker pages...", flush=True)
+            print(f"[REPORT] Adding {total} tracker pages (A4 landscape)...", flush=True)
             last = allegato_b_anchor
 
             for idx, img_path in enumerate(img_files):
                 if idx % 50 == 0:
                     print(f"[REPORT] {idx}/{total}...", flush=True)
-                last = insert_image_after(last, img_path)
+                last = _insert_image(last, img_path, TRK_IMG_W)
         else:
-            print("[REPORT] Warning: 'Riepilogo di ogni tracker' anchor not found.", flush=True)
+            print("[REPORT] Warning: 'Riepilogo di ogni tracker' not found.", flush=True)
+
+        # Body sectPr: A4 landscape governs all tracker pages (the final section)
+        _set_body_section(TRK_W, TRK_H,
+                          mt=TRK_MARGIN[0], mb=TRK_MARGIN[1],
+                          ml=TRK_MARGIN[2], mr=TRK_MARGIN[3])
 
         doc.save(output_path)
-        return f"Official report saved to:\n{output_path}"
+        label = "Sample" if sample_n else "Full"
+        return f"{label} official report saved to:\n{output_path}"
 
     except Exception as e:
         import traceback
@@ -1146,11 +1242,20 @@ class TrackerSuiteApp:
                                      state="disabled", command=self.run_pdf_random)
         f7.pack(fill="x", pady=2)
 
-        f8, self.btn8 = bordered_btn(btn_area,
-                                     "8.  GENERATE OFFICIAL REPORT  (.docx - run steps 3 & 4 first)",
+        row8 = tk.Frame(btn_area, bg="#f5f5f5")
+        row8.pack(fill="x", pady=2)
+
+        f8, self.btn8 = bordered_btn(row8,
+                                     "8a.  FULL REPORT  (.docx)",
                                      "#e8eaf6", "#283593", font_args=("Segoe UI", 9, "bold"),
                                      state="disabled", command=self.run_official_report)
-        f8.pack(fill="x", pady=2)
+        f8.pack(side="left", fill="both", expand=True, padx=(0, 2))
+
+        f8b, self.btn8b = bordered_btn(row8,
+                                       "8b.  SAMPLE REPORT  (.docx - 5 TCU per NCU, ~19 pages)",
+                                       "#ede7f6", "#4527a0", font_args=("Segoe UI", 9, "bold"),
+                                       state="disabled", command=self.run_official_report_sample)
+        f8b.pack(side="left", fill="both", expand=True, padx=(2, 0))
 
         # Log
         self.log_text = tk.Text(outer, height=9, bg="#202124", fg="#e8eaed",
@@ -1291,6 +1396,7 @@ class TrackerSuiteApp:
         self.btn6.config(state="normal" if has_plots else ("normal" if has_merged else "disabled"))
         self.btn7.config(state=s)
         self.btn8.config(state="normal" if has_merged else "disabled")
+        self.btn8b.config(state="normal" if has_merged else "disabled")
         self.btn_quick.config(state="normal" if has_raw else "disabled")
 
     # ---- Progress bar helpers ----
@@ -1741,9 +1847,33 @@ class TrackerSuiteApp:
         out_path = os.path.join(base, "05_Tracker_Report_PDF", y, m, out_name)
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
-        msg = worker_generate_official_report(base, date, template_path, out_path)
+        msg = worker_generate_official_report(base, date, template_path, out_path, sample_n=0)
         print(f"  {msg}")
         self.root.after(0, lambda: messagebox.showinfo("Official Report", msg))
+
+    def run_official_report_sample(self):
+        self.run_thread(self.exec_official_report_sample)
+
+    def exec_official_report_sample(self):
+        base, date = self.folder_path.get(), self.date_val.get()
+        y, m = date[:4], date[5:7]
+        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] STEP 8b: SAMPLE DOCX REPORT (5 TCU per NCU)")
+
+        template_path = os.path.join(base, TEMPLATE_FILENAME)
+        if not os.path.isfile(template_path):
+            msg = f"Template not found:\n{template_path}\n\nPlace the template file in the root folder."
+            print(f"  ERROR: {msg}")
+            self.root.after(0, lambda: messagebox.showerror("Template Missing", msg))
+            return
+
+        dt = datetime.strptime(date, "%Y-%m-%d")
+        out_name = f"{dt.strftime('%Y.%m.%d')} - Report Tracker SAMPLE.docx"
+        out_path = os.path.join(base, "05_Tracker_Report_PDF", y, m, out_name)
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
+        msg = worker_generate_official_report(base, date, template_path, out_path, sample_n=5)
+        print(f"  {msg}")
+        self.root.after(0, lambda: messagebox.showinfo("Sample Report", msg))
 
     # ---- Quick run all ----
     def run_quick_all(self):
