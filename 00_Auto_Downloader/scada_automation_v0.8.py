@@ -82,20 +82,17 @@ YEAR_COORDS = {
 }
 
 # 10. Date Search Area (Rectangle)
-# Shifted right ~23px to EXCLUDE the Wo (week-number) column.
-# The Wo column contains 14-19 which confuses template matching for days 14-19.
-# Top-Left: (804, 557), Bottom-Right: (963, 702)
-DATE_SEARCH_REGION = (620, 440, 160, 110) # (left, top, width, height) -- excludes Wo week-number column
+# Starts at Mo column (x=779) to exclude Wo week-number column
+DATE_SEARCH_REGION = (779, 555, 188, 147) # (left, top, width, height)
 
 # Optional override coordinates for specific dates.
-# Hardcoded exact screen coordinates for August 2026 captured from user click trace.
 DATE_COORDINATE_OVERRIDES = {}
 
-# Calendar grid layout for fallback coordinate calculation.
-CALENDAR_GRID_MONDAY_X  = 815  # x-center of the Monday (Mo) column
-CALENDAR_GRID_FIRST_ROW_Y = 569 # y-center of the first visible week row
-CALENDAR_CELL_W = 23            # pixels per day column
-CALENDAR_CELL_H = 24            # pixels per week row
+# Calendar grid layout for fallback coordinate calculation (measured directly from 1080p screenshot).
+CALENDAR_GRID_MONDAY_X  = 792   # x-center of the Monday (Mo) column
+CALENDAR_GRID_FIRST_ROW_Y = 567 # y-center of the first visible week row
+CALENDAR_CELL_W = 26.95         # pixels per day column
+CALENDAR_CELL_H = 24.5          # pixels per week row
 
 # 12. Time Selection
 COORDS_TIME_SCROLL_UP = (1043, 547)
@@ -273,37 +270,26 @@ def interruptible_sleep(seconds, check_interval=0.5):
 # ---------------------------------------------------------------------------
 
 def find_scada_window():
-    """1. Search for visible SCADA window."""
-    keywords = ["SCADA Web Client Starter", "SCADA Web Client", "SCADA"]
-    try:
-        all_wins = gw.getAllWindows()
-        for w in all_wins:
-            if w.title and w.visible and any(k.lower() in w.title.lower() for k in keywords):
-                return w
-    except Exception:
-        pass
-    return None
+    """1. Search for SCADA window."""
+    windows = gw.getWindowsWithTitle(SCADA_WINDOW_TITLE_PARTIAL)
+    if not windows:
+        print(f"Window '{SCADA_WINDOW_TITLE_PARTIAL}' not found.")
+        return None
+    return windows[0]
 
 def focus_scada_window(window):
-    """2. Restore, maximize, and focus SCADA window."""
+    """2. Restore, maximize, and focus SCADA window (v0.6 logic)."""
     if not window:
         return
     try:
         if window.isMinimized:
             window.restore()
-            time.sleep(0.5)
-        window.maximize()
         window.activate()
-        time.sleep(1.0)
+        time.sleep(1)
     except Exception as e:
         print(f"Error activating window: {e}")
 
-    
-    
-    # Fallback: Press Win+Up to ensure maximization
     time.sleep(0.5)
-    #pyautogui.hotkey('win', 'up')
-    time.sleep(1)
 
 def find_image_in_region(image_name, region, confidence=0.6):
     """
@@ -644,8 +630,8 @@ def process_hourly_report(target_date, target_hour):
             day_img = f"day_{target_date.day}"
             
             # Find ALL matches (handles calendar overflow dates from adjacent months)
-            all_matches = find_all_matches_in_region(day_img, DATE_SEARCH_REGION, confidence=0.8)
-            
+            all_matches = find_all_matches_in_region(day_img, DATE_SEARCH_REGION, confidence=0.75)
+
             if all_matches:
                 selected_match = select_best_date_match(all_matches, target_date)
                 if selected_match:
@@ -655,16 +641,24 @@ def process_hourly_report(target_date, target_hour):
                     print(f"Selected best match near expected grid ({expected_x},{expected_y}), distance={distance:.1f}, confidence={selected_match[2]:.2f}")
                 else:
                     print(f"No best match could be chosen from {len(all_matches)} candidates.")
+                    single_match = find_image_in_region(day_img, DATE_SEARCH_REGION, confidence=0.65)
+                    if single_match:
+                        pos = pyautogui.Point(single_match[0], single_match[1])
+                        print(f"Edge/Template single match found at {pos} with confidence {single_match[2]:.2f}")
+                    else:
+                        gx, gy = get_date_grid_coords(target_date)
+                        pos = pyautogui.Point(gx, gy)
+                        print(f"Grid fallback position: {pos}")
+            else:
+                single_match = find_image_in_region(day_img, DATE_SEARCH_REGION, confidence=0.65)
+                if single_match:
+                    pos = pyautogui.Point(single_match[0], single_match[1])
+                    print(f"Edge/Template single match found at {pos} with confidence {single_match[2]:.2f}")
+                else:
+                    print(f"Image match failed for day {target_date.day}. Using grid-based calculation.")
                     gx, gy = get_date_grid_coords(target_date)
                     pos = pyautogui.Point(gx, gy)
                     print(f"Grid fallback position: {pos}")
-            else:
-                # Fallback: calculate grid coordinates mathematically.
-                # This avoids false matches with the week-number (Wo) column.
-                print(f"Image match failed for day {target_date.day}. Using grid-based calculation.")
-                gx, gy = get_date_grid_coords(target_date)
-                pos = pyautogui.Point(gx, gy)
-                print(f"Grid fallback position: {pos}")
 
         print(f"Clicking on date {target_date.day} at position {pos}")
         pyautogui.click(pos)
@@ -778,8 +772,8 @@ def process_hourly_report(target_date, target_hour):
         except Exception as e:
             print(f"Error creating directory {dir_path}: {e}")
 
-    # Write clean filename to prevent Windows path duplication errors in Save As dialog
-    pyautogui.write(filename, interval=0.01)
+    # Write full absolute path to save file directly into target folder
+    pyautogui.write(full_path, interval=0.01)
 
     time.sleep(1.0)
 
