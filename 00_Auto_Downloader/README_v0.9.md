@@ -1,4 +1,4 @@
-# 📖 SCADA Automation v0.9 — User Guide & System Overview
+# 📖 SCADA Automation v0.9 - User Guide & System Overview
 
 `scada_automation_v0.9.py` is an automated data extraction tool for SCADA Web Client systems. It uses computer vision (OpenCV edge matching) and GUI automation (`pyautogui`, `pygetwindow`) to filter, extract, and save hourly tracker reports into structured network directories (`YYYY/MM/YYYY-MM-DD/DD_MM_YYYY_HH_JJ.csv`).
 
