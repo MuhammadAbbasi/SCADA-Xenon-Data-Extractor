@@ -85,22 +85,15 @@ YEAR_COORDS = {
 # Shifted right ~23px to EXCLUDE the Wo (week-number) column.
 # The Wo column contains 14-19 which confuses template matching for days 14-19.
 # Top-Left: (804, 557), Bottom-Right: (963, 702)
-DATE_SEARCH_REGION = (804, 557, 159, 145) # (left, top, width, height) -- excludes Wo week-number column
+DATE_SEARCH_REGION = (620, 440, 160, 110) # (left, top, width, height) -- excludes Wo week-number column
 
 # Optional override coordinates for specific dates.
-# If a specific date needs a manual click coordinate, add the date here
-# in ISO format and the function will bypass OpenCV matching.
-DATE_COORDINATE_OVERRIDES = {
-    "2026-05-04": (793, 588),
-}
+# Hardcoded exact screen coordinates for August 2026 captured from user click trace.
+DATE_COORDINATE_OVERRIDES = {}
 
 # Calendar grid layout for fallback coordinate calculation.
-# Grid: Wo | Mo | Di | Mi | Do | Fr | Sa | So  (8 cols, 6 rows)
-# Column width = 182/8 ≈ 22.75 → Mo center = 781 + 22.75 + 11.4 ≈ 815
-# Row height   = 145/6 ≈ 24.2  → first row center = 557 + 12.1 ≈ 569
 CALENDAR_GRID_MONDAY_X  = 815  # x-center of the Monday (Mo) column
 CALENDAR_GRID_FIRST_ROW_Y = 569 # y-center of the first visible week row
-
 CALENDAR_CELL_W = 23            # pixels per day column
 CALENDAR_CELL_H = 24            # pixels per week row
 
@@ -154,59 +147,82 @@ DELAY_CLOSE_SAVE = 20
 # ---------------------------------------------------------------------------
 
 # --- Global status for overlay ---
-current_status = "Initializing..."
+current_status = "Inizializzazione..."
+
+# Colour palette
+_C = {
+    'bg':      '#2b2b2b',   # dark grey
+    'panel':   '#3c3c3c',   # mid grey panel
+    'accent':  '#1e6f9f',   # blue accent
+    'green':   '#00d4aa',   # teal-green for running state
+    'yellow':  '#ffd166',   # warm yellow for status text
+    'white':   '#e0e0e0',
+    'red':     '#ef233c',
+    'border':  '#1e6f9f',
+}
 
 def _overlay_worker():
-    """Draws a professional status overlay with current task information."""
+    """Draws a professional status overlay (Italian) with current task information."""
     try:
         root = tk.Tk()
-        root.overrideredirect(True)          # no title bar / borders
-        root.attributes('-topmost', True)    # always on top of everything
-        root.attributes('-alpha', 0.9)       # slightly transparent
-        
-        # Position in top-right corner
+        root.overrideredirect(True)
+        root.attributes('-topmost', True)
+        root.attributes('-alpha', 0.93)
+
+        OW, OH = 420, 90
         sw = root.winfo_screenwidth()
-        overlay_width = 400
-        overlay_height = 100
-        x_pos = sw - overlay_width - 20
-        y_pos = 20
-        root.geometry(f"{overlay_width}x{overlay_height}+{x_pos}+{y_pos}")
+        root.geometry(f"{OW}x{OH}+{sw - OW - 20}+20")
+        root.configure(bg=_C['bg'])
 
-        # Background frame
-        frame = tk.Frame(root, bg='black', bd=2, relief='raised')
-        frame.pack(fill='both', expand=True, padx=5, pady=5)
-        
-        # Status label
+        # Rounded-look outer container
+        outer = tk.Frame(root, bg=_C['accent'], bd=0)
+        outer.pack(fill='both', expand=True, padx=2, pady=2)
+
+        inner = tk.Frame(outer, bg=_C['panel'], bd=0)
+        inner.pack(fill='both', expand=True, padx=1, pady=1)
+
+        # Title row
+        title_row = tk.Frame(inner, bg=_C['accent'])
+        title_row.pack(fill='x')
+        tk.Label(
+            title_row, text="  SCADA  Automazione",
+            font=('Segoe UI', 10, 'bold'), fg=_C['white'], bg=_C['accent'],
+            anchor='w'
+        ).pack(side='left', pady=4, padx=6)
+        status_dot_label = tk.Label(
+            title_row, text="ATTIVO  ●",
+            font=('Segoe UI', 9, 'bold'), fg=_C['green'], bg=_C['accent'],
+            anchor='e'
+        )
+        status_dot_label.pack(side='right', pady=4, padx=8)
+
+        # Status text
         status_var = tk.StringVar(value=current_status)
-        status_label = tk.Label(frame, text="SCADA Automation Status", font=('Arial', 12, 'bold'), fg='white', bg='black')
-        status_label.pack(pady=(10,5))
-        
-        task_label = tk.Label(frame, textvariable=status_var, font=('Arial', 10), fg='yellow', bg='black', wraplength=380, justify='center')
-        task_label.pack(pady=(0,10))
+        task_label = tk.Label(
+            inner, textvariable=status_var,
+            font=('Segoe UI', 9), fg=_C['yellow'], bg=_C['panel'],
+            wraplength=400, justify='left', anchor='w'
+        )
+        task_label.pack(fill='x', padx=10, pady=(6, 2))
 
-        # Animated border
-        canvas = tk.Canvas(frame, width=overlay_width-10, height=overlay_height-10, bg='black', highlightthickness=0)
-        canvas.pack(fill='both', expand=True)
-        
-        T = 3  # thickness
-        outer_rect = canvas.create_rectangle(2, 2, overlay_width-12, overlay_height-12, outline='red', width=T)
-        inner_rect = canvas.create_rectangle(T+2, T+2, overlay_width-T-12, overlay_height-T-12, outline='blue', width=T)
+        # Hint row
+        tk.Label(
+            inner, text="Premi Ctrl+Alt+.  per interrompere",
+            font=('Segoe UI', 7), fg='#888888', bg=_C['panel'], anchor='w'
+        ).pack(fill='x', padx=10, pady=(0, 4))
 
+        # Pulsing dot in title
         _tick = [0]
-
         def animate():
             _tick[0] ^= 1
-            if _tick[0]:
-                canvas.itemconfig(outer_rect, outline='red')
-                canvas.itemconfig(inner_rect, outline='blue')
-            else:
-                canvas.itemconfig(outer_rect, outline='blue')
-                canvas.itemconfig(inner_rect, outline='red')
-            root.after(500, animate)
+            dot_color = _C['green'] if _tick[0] else _C['panel']
+            # Rebuild the label text with toggled dot colour (simplest approach)
+            status_dot_label.configure(foreground=dot_color)
+            root.after(800, animate)
 
         def update_status():
             status_var.set(current_status)
-            root.after(1000, update_status)  # Update every second
+            root.after(1000, update_status)
 
         def check_stop():
             if stop_event.is_set():
@@ -214,12 +230,12 @@ def _overlay_worker():
                 return
             root.after(200, check_stop)
 
-        root.after(500, animate)
+        root.after(800, animate)
         root.after(1000, update_status)
         root.after(200, check_stop)
         root.mainloop()
     except Exception as e:
-        print(f"[Overlay] Error: {e}")
+        print(f"[Overlay] Errore: {e}")
 
 def show_overlay():
     """Start the screen border overlay in a background thread."""
@@ -257,20 +273,28 @@ def interruptible_sleep(seconds, check_interval=0.5):
 # ---------------------------------------------------------------------------
 
 def find_scada_window():
-    """1. Search for SCADA window."""
-    windows = gw.getWindowsWithTitle(SCADA_WINDOW_TITLE_PARTIAL)
-    if not windows:
-        print(f"Window '{SCADA_WINDOW_TITLE_PARTIAL}' not found.")
-        return None
-    return windows[0]
+    """1. Search for visible SCADA window."""
+    keywords = ["SCADA Web Client Starter", "SCADA Web Client", "SCADA"]
+    try:
+        all_wins = gw.getAllWindows()
+        for w in all_wins:
+            if w.title and w.visible and any(k.lower() in w.title.lower() for k in keywords):
+                return w
+    except Exception:
+        pass
+    return None
 
 def focus_scada_window(window):
-    """2. Maximize and focus."""
+    """2. Restore, maximize, and focus SCADA window."""
+    if not window:
+        return
     try:
         if window.isMinimized:
             window.restore()
+            time.sleep(0.5)
+        window.maximize()
         window.activate()
-        time.sleep(1)
+        time.sleep(1.0)
     except Exception as e:
         print(f"Error activating window: {e}")
 
@@ -456,32 +480,32 @@ def perform_initial_setup():
     # and then the MAIN loop will call Steps 3-6.
     
     print("=== Step 1 & 2: Window Management ===")
-    current_status = "Finding SCADA window..."
+    current_status = "Ricerca finestra SCADA..."
     max_attempts = 10  # Retry up to 10 times
     for attempt in range(max_attempts):
         window = find_scada_window()
         if window:
-            current_status = "Activating SCADA window..."
+            current_status = "Attivazione finestra SCADA..."
             focus_scada_window(window)
-            current_status = "SCADA window ready"
+            current_status = "Finestra SCADA pronta"
             return True
         print(f"SCADA window not found (attempt {attempt + 1}/{max_attempts}). Waiting 5 seconds...")
         time.sleep(5)
-    current_status = "Failed to find SCADA window"
+    current_status = "Finestra SCADA non trovata"
     print("Failed to find SCADA window after multiple attempts.")
     return False
 
 def ensure_scada_window_active():
     """Ensure the SCADA window is active and in front."""
     global current_status
-    current_status = "Ensuring SCADA window is active..."
+    current_status = "Verifica finestra SCADA attiva..."
     window = find_scada_window()
     if window:
         focus_scada_window(window)
-        current_status = "SCADA window activated"
+        current_status = "Finestra SCADA attivata"
         return True
     else:
-        current_status = "SCADA window not found"
+        current_status = "Finestra SCADA non trovata"
         print("SCADA window not found.")
         return False
 
@@ -501,26 +525,26 @@ def perform_scada_prep():
     """Execute Steps 3-6 (Analisi -> ORA) every time."""
     global current_status
     print("=== Step 3: Click ANALISI ===")
-    current_status = "Navigating to Analisi section..."
+    current_status = "Navigazione alla sezione Analisi..."
     pyautogui.click(COORDS_ANALISI)
     time.sleep(DELAY_ACTION)
 
     print("=== Step 4: Click Dropdown Selezione Intervallo ===")
-    current_status = "Opening interval selection..."
+    current_status = "Apertura selezione intervallo..."
     pyautogui.click(COORDS_SELEZIONE_INTERVALLO_DROPDOWN)
     time.sleep(0.5)
 
     print("=== Step 5: Click Scroll Up x5 ===")
-    current_status = "Scrolling to ORA option..."
+    current_status = "Scorrimento verso opzione ORA..."
     for _ in range(5):
         pyautogui.click(COORDS_SELEZIONE_INTERVALLO_SCROLL_UP)
         time.sleep(0.1)
     
     print("=== Step 6: Click ORA ===")
-    current_status = "Selecting ORA interval..."
+    current_status = "Selezione intervallo ORA..."
     pyautogui.click(COORDS_SELEZIONE_INTERVALLO_ORA)
     time.sleep(DELAY_ACTION)
-    current_status = "Interface prepared for report selection"
+    current_status = "Interfaccia pronta per selezione report"
     return True
 
 def get_date_grid_coords(target_date):
@@ -542,13 +566,30 @@ def get_date_grid_coords(target_date):
 def process_hourly_report(target_date, target_hour):
     """Execute Steps 7-18 for a specific date and hour."""
     global current_status
+    
+    # Check if expected output CSV already exists and is non-empty
+    year_str = str(target_date.year)
+    month_str = f"{target_date.month:02d}"
+    day_str = f"{target_date.day:02d}"
+    hh_str = f"{target_hour:02d}"
+    jj = (target_hour + 1) if (target_hour + 1) < 24 else 0
+    jj_str = f"{jj:02d}"
+    date_dash = f"{year_str}-{month_str}-{day_str}"
+    filename = f"{day_str}_{month_str}_{year_str}_{hh_str}_{jj_str}.csv"
+    check_path = os.path.join(PATH_TO_ORI_FOLDER, year_str, month_str, date_dash, filename)
+    
+    if os.path.exists(check_path) and os.path.getsize(check_path) > 0:
+        print(f"  ✓ Tracker file already exists for {target_date} {target_hour:02d}:00 ({filename}). Skipping!")
+        current_status = f"File già presente: {filename}"
+        return True
+
     print(f"Starting Process for {target_date} // {target_hour}:00")
-    current_status = f"Processing report for {target_date} {target_hour}:00"
+    current_status = f"Elaborazione report {target_date} ore {target_hour}:00"
 
     # Calendar window should be open (or opens after ORA selection)
     
     print("=== Step 7: Click Month Dropdown ===")
-    current_status = "Selecting month..."
+    current_status = "Selezione mese..."
     pyautogui.click(COORDS_MONTH_DROPDOWN)
     time.sleep(0.5)
 
@@ -557,13 +598,13 @@ def process_hourly_report(target_date, target_hour):
     if month_coords:
         pyautogui.click(month_coords)
     else:
-        current_status = f"Error: No coords for month {target_date.month}"
+        current_status = f"Errore: coordinate non trovate per mese {target_date.month}"
         print(f"Error: No coords for month {target_date.month}")
         return False
     time.sleep(0.5)
 
     print("=== Step 9: Select Year ===")
-    current_status = "Selecting year..."
+    current_status = "Selezione anno..."
     if (target_date.year != datetime.date.today().year):
         pyautogui.click(COORDS_YEAR_DROPDOWN)
         time.sleep(0.5)
@@ -578,7 +619,7 @@ def process_hourly_report(target_date, target_hour):
             print(f"Clicking Year {target_date.year}")
             pyautogui.click(year_coords)
         else:
-            current_status = f"Error: No coords for year {target_date.year}"
+            current_status = f"Errore: coordinate non trovate per anno {target_date.year}"
             print(f"Error: No coords for year {target_date.year}. Available: {list(YEAR_COORDS.keys())}")
             return False
     else:
@@ -587,7 +628,7 @@ def process_hourly_report(target_date, target_hour):
     time.sleep(0.5)
 
     print(f"=== Step 10: Select Date ({target_date.day}) ===")
-    current_status = f"Selecting date {target_date.day}..."
+    current_status = f"Selezione giorno {target_date.day}..."
     
     # Check if target date is today
     if target_date == datetime.date.today():
@@ -634,14 +675,14 @@ def process_hourly_report(target_date, target_hour):
         check_color_is_black_bg_white_text(pos.x, pos.y)
 
     print("=== Step 12: Time Selection - Reset to Min ===")
-    current_status = "Resetting time selection..."
+    current_status = "Reset selezione orario..."
     # Click 20 times Scroll Up
     for _ in range(20):
         pyautogui.click(COORDS_TIME_SCROLL_UP)
         time.sleep(0.05)
     
     print(f"=== Step 13: Select Time {target_hour}:00 ===")
-    current_status = f"Selecting time {target_hour}:00..."
+    current_status = f"Selezione orario {target_hour}:00..."
     # NEW Logic for v0.4
     # - 00:00 - 04:00: Click specific Y coords (No further scroll).
     # - 05:00: Click Base (No scroll, if it's visible).
@@ -661,7 +702,7 @@ def process_hourly_report(target_date, target_hour):
             print(f"Clicking specific coord for {target_hour}:00")
             pyautogui.click(coords)
         else:
-            current_status = f"Error: No coords for hour {target_hour}"
+            current_status = f"Errore: coordinate non trovate per ora {target_hour}"
             print(f"Error: No coords for hour {target_hour}")
             return False
             
@@ -685,20 +726,20 @@ def process_hourly_report(target_date, target_hour):
     time.sleep(0.5)
     
     print("Clicking OK Filter Button...")
-    current_status = "Applying filters..."
+    current_status = "Applicazione filtri..."
     pyautogui.click(COORDS_FILTER_WINDOW_OK_BUTTON)
 
     print(f"=== Step 14: Wait for Load ({DELAY_LOAD_DATA}s) ===")
-    current_status = f"Loading data... ({DELAY_LOAD_DATA}s)"
+    current_status = f"Caricamento dati... ({DELAY_LOAD_DATA}s)"
     interruptible_sleep(DELAY_LOAD_DATA)
 
     print("=== Step 15: Click Export ===")
-    current_status = "Initiating export..."
+    current_status = "Avvio esportazione..."
     pyautogui.click(COORDS_ESPORTA_DATI_BUTTON)
     time.sleep(2.0) # Wait for dialog
 
     print("=== Step 16 & 17: Save File Logic ===")
-    current_status = "Preparing save dialog..."
+    current_status = "Preparazione finestra di salvataggio..."
     # Click filename field
     pyautogui.click(COORDS_FILE_SAVE_DIALOG_FILENAME)
     time.sleep(0.5)
@@ -737,14 +778,41 @@ def process_hourly_report(target_date, target_hour):
         except Exception as e:
             print(f"Error creating directory {dir_path}: {e}")
 
-    pyautogui.write(full_path, interval=0.01)
+    # Write clean filename to prevent Windows path duplication errors in Save As dialog
+    pyautogui.write(filename, interval=0.01)
 
     time.sleep(1.0)
 
     print("=== Step 18: Save and Wait ===")
-    current_status = f"Saving... ({DELAY_SAVE_FILE}s)"
+    current_status = f"Salvataggio..."
     pyautogui.click(COORDS_FILE_SAVE_DIALOG_SAVE_BUTTON)
-    interruptible_sleep(DELAY_SAVE_FILE)
+    time.sleep(0.5)
+
+    # Automatically confirm Windows 'File already exists / Overwrite?' dialog if shown
+    pyautogui.press('y')
+    pyautogui.press('enter')
+
+    # Polled wait: check for file creation on disk up to DELAY_SAVE_FILE seconds
+    deadline = time.time() + DELAY_SAVE_FILE
+    file_saved = False
+    while time.time() < deadline and not stop_event.is_set():
+        if (os.path.exists(full_path) and os.path.getsize(full_path) > 0) or \
+           os.path.exists(os.path.join(PATH_TO_ORI_FOLDER, filename)):
+            print(f"✓ File save confirmed: {filename}")
+            file_saved = True
+            time.sleep(1.0)
+            break
+        time.sleep(0.5)
+
+    # Ensure file is at target full_path
+    if not os.path.exists(full_path):
+        try:
+            import shutil
+            alt_path = os.path.join(PATH_TO_ORI_FOLDER, filename)
+            if os.path.exists(alt_path):
+                shutil.move(alt_path, full_path)
+        except Exception:
+            pass
 
     print(f"Task Completed FOR {target_hour}:00")
     current_status = f"Report saved for {target_hour}:00"
@@ -771,59 +839,145 @@ def get_first_run_target():
 
 def show_time_selection_dialog():
     """
-    Show a dialog to let the user select a starting date and time for backfill.
+    Show an Italian dialog to select the starting date and hour for backfill.
     Returns a tuple (start_date, start_hour) or (None, None) if cancelled.
     """
     dialog = tk.Tk()
-    dialog.title("SCADA Backfill Extraction")
-    dialog.geometry("400x300")
-    
-    result = [None, None]  # [date, hour]
-    
+    dialog.title("SCADA — Estrazione Dati")
+    dialog.resizable(False, False)
+
+    # Centre on screen
+    DW, DH = 460, 470
+    sw = dialog.winfo_screenwidth()
+    sh = dialog.winfo_screenheight()
+    dialog.geometry(f"{DW}x{DH}+{(sw - DW)//2}+{(sh - DH)//2}")
+    dialog.configure(bg=_C['bg'])
+
+    result = [None, None]
+
+    # ── Header bar ─────────────────────────────────────────────────────────────
+    header = tk.Frame(dialog, bg=_C['accent'], height=54)
+    header.pack(fill='x')
+    header.pack_propagate(False)
+    tk.Label(
+        header, text="SCADA  |  Estrazione Dati Storici",
+        font=('Segoe UI', 13, 'bold'), fg=_C['white'], bg=_C['accent']
+    ).pack(expand=True)
+
+    # ── Body ───────────────────────────────────────────────────────────────────
+    body = tk.Frame(dialog, bg=_C['bg'])
+    body.pack(fill='both', expand=True, padx=24, pady=16)
+
+    def section_label(parent, text):
+        tk.Label(
+            parent, text=text,
+            font=('Segoe UI', 9, 'bold'), fg='#aaaaaa', bg=_C['bg'], anchor='w'
+        ).pack(fill='x', pady=(10, 2))
+
+    # ── Date picker ────────────────────────────────────────────────────────────
+    section_label(body, "DATA DI INIZIO")
+    date_frame = tk.Frame(body, bg=_C['panel'], bd=0, relief='flat')
+    date_frame.pack(fill='x', ipady=4)
+    today = datetime.date.today()
+    date_entry = DateEntry(
+        date_frame, width=22,
+        background=_C['accent'], foreground=_C['white'],
+        selectbackground=_C['green'], selectforeground='black',
+        normalbackground='white', normalforeground='#111111',
+        headersbackground=_C['accent'], headersforeground=_C['white'],
+        weekendbackground='white', weekendforeground='#cc2222',
+        othermonthbackground='#f0f0f0', othermonthforeground='#999999',
+        borderwidth=0, font=('Segoe UI', 11),
+        year=today.year, month=today.month, day=today.day,
+        date_pattern='dd/mm/yyyy', locale='it_IT'
+    )
+    date_entry.pack(padx=8, pady=4)
+
+    # ── Hour picker ────────────────────────────────────────────────────────────
+    section_label(body, "ORA DI INIZIO  (0 – 23)")
+
+    hour_frame = tk.Frame(body, bg=_C['panel'])
+    hour_frame.pack(fill='x', ipady=4)
+
+    hour_var = tk.IntVar(value=0)
+
+    def _dec():
+        v = hour_var.get()
+        if v > 0:
+            hour_var.set(v - 1)
+            _refresh_hour()
+
+    def _inc():
+        v = hour_var.get()
+        if v < 23:
+            hour_var.set(v + 1)
+            _refresh_hour()
+
+    def _refresh_hour():
+        hour_display.configure(text=f"{hour_var.get():02d}:00")
+
+    btn_style = dict(font=('Segoe UI', 14, 'bold'), fg=_C['white'],
+                     bg=_C['accent'], activebackground=_C['green'],
+                     activeforeground='black', bd=0, width=3, cursor='hand2')
+
+    btn_minus = tk.Button(hour_frame, text="−", command=_dec, **btn_style)
+    btn_minus.pack(side='left', padx=(8, 4), pady=4)
+
+    hour_display = tk.Label(
+        hour_frame, text="00:00",
+        font=('Segoe UI', 16, 'bold'), fg=_C['yellow'], bg=_C['panel'], width=6
+    )
+    hour_display.pack(side='left', padx=4)
+
+    btn_plus = tk.Button(hour_frame, text="+", command=_inc, **btn_style)
+    btn_plus.pack(side='left', padx=(4, 8), pady=4)
+
+    # ── Info box ───────────────────────────────────────────────────────────────
+    info_frame = tk.Frame(body, bg='#0d2137', bd=0)
+    info_frame.pack(fill='x', pady=(14, 0))
+    tk.Label(
+        info_frame,
+        text="ℹ  Verranno estratti tutti i report dalla data/ora selezionata\n"
+             "   fino ad ora, poi l'automazione continuerà ogni ora.",
+        font=('Segoe UI', 9), fg='#88ccee', bg='#0d2137',
+        justify='left', anchor='w', wraplength=380
+    ).pack(padx=10, pady=8)
+
+    # ── Error label ────────────────────────────────────────────────────────────
+    error_var = tk.StringVar()
+    error_label = tk.Label(body, textvariable=error_var, font=('Segoe UI', 9),
+                           fg=_C['red'], bg=_C['bg'])
+    error_label.pack(pady=(6, 0))
+
+    # ── Buttons ────────────────────────────────────────────────────────────────
     def on_ok():
-        selected_date = date_entry.get_date()
-        hour_val = hour_spinbox.get()
-        try:
-            hour = int(hour_val)
-            if 0 <= hour <= 23:
-                result[0] = selected_date
-                result[1] = hour
-                dialog.destroy()
-            else:
-                print("Hour must be between 0 and 23")
-        except ValueError:
-            print("Invalid hour value")
-    
+        result[0] = date_entry.get_date()
+        result[1] = hour_var.get()
+        dialog.destroy()
+
     def on_cancel():
         dialog.destroy()
-    
-    # Label and DateEntry
-    tk.Label(dialog, text="Select Starting Date:", font=("Arial", 12, "bold")).pack(pady=10)
-    date_entry = DateEntry(dialog, width=20, background='darkblue', foreground='white', 
-                          borderwidth=2, year=datetime.date.today().year, 
-                          month=datetime.date.today().month, 
-                          day=datetime.date.today().day)
-    date_entry.pack(pady=5)
-    
-    # Hour selection
-    tk.Label(dialog, text="Select Starting Hour (0-23):", font=("Arial", 12, "bold")).pack(pady=10)
-    hour_spinbox = tk.Spinbox(dialog, from_=0, to=23, width=10, font=("Arial", 12))
-    hour_spinbox.delete(0, tk.END)
-    hour_spinbox.insert(0, 0)
-    hour_spinbox.pack(pady=5)
-    
-    # Buttons
-    button_frame = tk.Frame(dialog)
-    button_frame.pack(pady=20)
-    tk.Button(button_frame, text="OK", command=on_ok, width=10, font=("Arial", 11)).pack(side=tk.LEFT, padx=5)
-    tk.Button(button_frame, text="Cancel", command=on_cancel, width=10, font=("Arial", 11)).pack(side=tk.LEFT, padx=5)
-    
-    # Show info
-    info_text = "This will extract reports from the selected\ndate/time until now, then continue\nwith hourly automation."
-    tk.Label(dialog, text=info_text, font=("Arial", 10), justify=tk.CENTER).pack(pady=10)
-    
+
+    btn_frame = tk.Frame(dialog, bg=_C['bg'])
+    btn_frame.pack(fill='x', padx=24, pady=(8, 20))
+
+    tk.Button(
+        btn_frame, text="▶   Estrai Dati Storici e Continua",
+        command=on_ok,
+        font=('Segoe UI', 11, 'bold'), fg='black', bg=_C['green'],
+        activebackground='#00ffcc', activeforeground='black',
+        bd=0, pady=11, cursor='hand2', relief='flat'
+    ).pack(fill='x', pady=(0, 6))
+
+    tk.Button(
+        btn_frame, text="Annulla",
+        command=on_cancel,
+        font=('Segoe UI', 10), fg='#aaaaaa', bg=_C['panel'],
+        activebackground='#2a2a4a', activeforeground=_C['white'],
+        bd=0, pady=8, cursor='hand2', relief='flat'
+    ).pack(fill='x')
+
     dialog.mainloop()
-    
     return result[0], result[1]
 
 
@@ -868,12 +1022,12 @@ if __name__ == "__main__":
     print("=" * 60)
 
     # Show time selection dialog
-    current_status = "Waiting for user input..."
+    current_status = "In attesa di input utente..."
     print("\nShowing time selection dialog...")
     start_date, start_hour = show_time_selection_dialog()
     
     if start_date is None or start_hour is None:
-        current_status = "User cancelled time selection"
+        current_status = "Operazione annullata dall'utente"
         print("User cancelled time selection. Exiting.")
         sys.exit(0)
     
@@ -881,9 +1035,9 @@ if __name__ == "__main__":
     current_status = f"Backfill from {start_date} {start_hour}:00"
 
     # Initial setup
-    current_status = "Performing initial setup..."
+    current_status = "Configurazione iniziale..."
     if not perform_initial_setup():
-        current_status = "Initial setup failed"
+        current_status = "Configurazione iniziale fallita"
         print("Initial setup failed.")
         sys.exit(1)
 
@@ -898,19 +1052,19 @@ if __name__ == "__main__":
     # Process all backfill hours
     if hours_to_process:
         print(f"\nStarting backfill extraction for {len(hours_to_process)} hours...")
-        current_status = f"Backfill: 0/{len(hours_to_process)}"
+        current_status = f"Recupero storico: 0/{len(hours_to_process)}"
         
         success_count = 0
         for idx, (target_date, target_hour) in enumerate(hours_to_process):
             if stop_event.is_set():
-                current_status = "Backfill stopped by user"
+                current_status = "Recupero storico interrotto dall'utente"
                 print("Backfill stopped by user")
                 break
             
-            current_status = f"Backfill: {idx + 1}/{len(hours_to_process)} - {target_date} {target_hour}:00"
+            current_status = f"Recupero: {idx + 1}/{len(hours_to_process)} — {target_date} ore {target_hour}:00"
             
             if not ensure_scada_window_active():
-                current_status = "Failed to activate SCADA window"
+                current_status = "Impossibile attivare finestra SCADA"
                 print("Failed to activate SCADA window during backfill, stopping")
                 break
             
@@ -921,65 +1075,61 @@ if __name__ == "__main__":
                 print("Waiting for reset animation...")
                 time.sleep(2.0)
             else:
-                current_status = f"Failed at hour {target_hour}:00"
+                current_status = f"Errore all'ora {target_hour}:00"
                 print(f"Failed to process {target_date} {target_hour}:00")
                 break
         
         print(f"\nBackfill completed: {success_count}/{len(hours_to_process)} hours processed")
-        current_status = f"Backfill complete: {success_count}/{len(hours_to_process)}"
+        current_status = f"Recupero completato: {success_count}/{len(hours_to_process)} ore"
         time.sleep(2)
     else:
         print("No hours to backfill (start time is already past now).")
 
-    # Continue with normal hourly automation
+    # Continue with normal hourly automation indefinitely (runs across midnight)
     print("\nStarting regular hourly automation...")
-    current_status = "Starting hourly automation"
-
-    today = datetime.date.today()
-    print(f"Starting hourly automation for {today}")
+    current_status = "Avvio automazione oraria"
 
     while not stop_event.is_set():
-        now = datetime.datetime.now()
         next_trigger = get_next_trigger_time()
         target_hour = (next_trigger.hour - 1) % 24
-        target_date = now.date()
-        if next_trigger.hour == 0:
-            target_date = now.date() - datetime.timedelta(days=1)
 
         wait_seconds = (next_trigger - datetime.datetime.now()).total_seconds()
         if wait_seconds > 0:
-            current_status = f"Waiting until {next_trigger.strftime('%H:%M')} for hour {target_hour}:00"
+            current_status = f"In attesa fino alle {next_trigger.strftime('%H:%M')} per ora {target_hour}:00"
             print(f"Waiting until {next_trigger} to download for hour {target_hour}:00")
             interruptible_sleep(wait_seconds)
 
         if stop_event.is_set():
-            current_status = "Automation stopped by user"
+            current_status = "Automazione interrotta dall'utente"
             break
 
+        # Calculate target_date AFTER sleeping so midnight crossings resolve correctly:
+        # if next_trigger was 00:05 we are now past midnight, now.date() is already the new day,
+        # and the report we want is for hour 23 of the day that just ended (yesterday).
+        now = datetime.datetime.now()
+        if next_trigger.hour == 0:
+            target_date = now.date() - datetime.timedelta(days=1)
+        else:
+            target_date = now.date()
+
         print(f"Downloading report for {target_date} {target_hour}:00")
-        current_status = f"Downloading report for {target_hour}:00"
+        current_status = f"Download report ore {target_hour}:00"
         if not ensure_scada_window_active():
-            current_status = "Failed to activate SCADA window"
+            current_status = "Impossibile attivare finestra SCADA"
             print("Failed to activate SCADA window, stopping")
             break
         perform_scada_prep()
         success = process_hourly_report(target_date, target_hour)
         if success:
-            current_status = "Resetting interface..."
+            current_status = "Reset interfaccia..."
             perform_reset()
             print("Waiting for reset animation...")
             time.sleep(2.0)
-            current_status = "Ready for next report"
+            current_status = "Pronto per il prossimo report"
         else:
-            current_status = "Failed to download report"
+            current_status = "Download report fallito"
             print("Failed to download, stopping")
             break
 
-        # Stop after 23:00
-        if target_hour == 23:
-            current_status = "Completed all hours for the day"
-            print("Downloaded last hour of the day, stopping.")
-            break
-
-    current_status = "Automation completed"
+    current_status = "Automazione completata"
     print("Automation completed.")

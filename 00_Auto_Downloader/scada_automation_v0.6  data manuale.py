@@ -22,7 +22,11 @@ stop_event = threading.Event()
 # --- Configuration ---
 # PATHS & DELAYS (User to configure these if needed)
 PATH_TO_ORI_FOLDER = r"//S01/get/2025.01 Mazara 01 A2A/03 - REPORT/Report/04 Tracker report/01_Original_files" # Placeholder path
-ASSETS_DIR = "assets"
+# Resolved against this file, not the working directory. The orchestrator imports
+# this module from '09 - Scada Programs Combination', where a relative "assets"
+# does not exist — every template lookup logged "Asset missing" and silently fell
+# through to the grid fallback, disabling image matching entirely.
+ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 
 # WINDOW
 SCADA_WINDOW_TITLE_PARTIAL = "SCADA Web Client Starter"
@@ -80,22 +84,18 @@ YEAR_COORDS = {
 }
 
 # 10. Date Search Area (Rectangle)
-# Shifted right ~23px to EXCLUDE the Wo (week-number) column.
-# The Wo column contains 14-19 which confuses template matching for days 14-19.
-# Top-Left: (804, 557), Bottom-Right: (963, 702)
-DATE_SEARCH_REGION = (804, 557, 159, 145) # (left, top, width, height) -- excludes Wo week-number column
+# The calendar day grid, with the Wo (week-number) column already outside it —
+# the Wo column contains 14-19 and confuses template matching for those days.
+# Same rect scada_downloader.py uses, whose OCR is confirmed accurate in the logs.
+# The old (804, 557, ...) started 12 px right of the Monday column centre (792),
+# so Monday dates could never be matched at all.
+DATE_SEARCH_REGION = (620, 440, 160, 110) # (left, top, width, height) -- excludes Wo week-number column
 
 # Optional override coordinates for specific dates.
-# If a specific date needs a manual click coordinate, add the date here
-# in ISO format and the function will bypass OpenCV matching.
-DATE_COORDINATE_OVERRIDES = {
-    "2026-05-04": (793, 588),
-}
+# Hardcoded exact screen coordinates for August 2026 captured from user click trace.
+DATE_COORDINATE_OVERRIDES = {}
 
 # Calendar grid layout for fallback coordinate calculation.
-# Grid: Wo | Mo | Di | Mi | Do | Fr | Sa | So  (8 cols, 6 rows)
-# Column width = 182/8 ≈ 22.75 → Mo center = 781 + 22.75 + 11.4 ≈ 815
-# Row height   = 145/6 ≈ 24.2  → first row center = 557 + 12.1 ≈ 569
 CALENDAR_GRID_MONDAY_X  = 815  # x-center of the Monday (Mo) column
 CALENDAR_GRID_FIRST_ROW_Y = 569 # y-center of the first visible week row
 CALENDAR_CELL_W = 23            # pixels per day column
@@ -617,6 +617,10 @@ def process_hourly_report(target_date, target_hour):
 
         print(f"Clicking on date {target_date.day} at position {pos}")
         pyautogui.click(pos)
+        time.sleep(0.2)
+        pyautogui.click(pos)
+        time.sleep(0.2)
+        pyautogui.press('enter')
         time.sleep(0.5)
 
         # Step 11: Color Check
@@ -725,7 +729,25 @@ def process_hourly_report(target_date, target_hour):
 
     print("=== Step 18: Save and Wait ===")
     pyautogui.click(COORDS_FILE_SAVE_DIALOG_SAVE_BUTTON)
-    interruptible_sleep(DELAY_SAVE_FILE)
+    time.sleep(0.5)
+
+    # Automatically confirm Windows 'File already exists / Overwrite?' dialog if shown
+    pyautogui.press('y')
+    pyautogui.press('enter')
+
+    # Polled wait: check for file creation on disk up to DELAY_SAVE_FILE seconds
+    deadline = time.time() + DELAY_SAVE_FILE
+    file_saved = False
+    while time.time() < deadline and not stop_event.is_set():
+        if os.path.exists(full_path) and os.path.getsize(full_path) > 0:
+            print(f"✓ File save confirmed: {filename} ({os.path.getsize(full_path)} bytes)")
+            file_saved = True
+            time.sleep(1.0) # Settle sleep
+            break
+        time.sleep(0.5)
+
+    if not file_saved:
+        print(f"Warning: Timeout waiting for {filename} after {DELAY_SAVE_FILE}s.")
 
     print(f"Task Completed FOR {target_hour}:00")
     return True
@@ -797,7 +819,7 @@ if __name__ == "__main__":
 
     # April 17: hours 18-23 (18:00 to 23:00)
     if not stop_event.is_set():
-        run_bulk_automation(datetime.date(2026, 6, 1), num_days=1, start_hour=0, end_hour=24)
+        run_bulk_automation(datetime.date(2026, 7, 2), num_days=1, start_hour=0, end_hour=17)
 
     # April 18 & 19: full day (00:00 to 23:00)
     #if not stop_event.is_set():
@@ -806,3 +828,8 @@ if __name__ == "__main__":
     # Signal overlay to close
     stop_event.set()
     print("All done. Overlay closed.")
+
+
+"add the ogni ora this logic that should start downloading data from previous days "
+"and when they are completed, it starts downloading the next day data, and so on until it reaches the "
+"current day data. For example, if I start the script on 17 April 2026 at 18:00, it should start downloading data from 17 April 2026 at 18:00 to 23:00, then it should start downloading data from 18 April 2026 at 00:00 to 23:00, then it should start downloading data overy hour"
