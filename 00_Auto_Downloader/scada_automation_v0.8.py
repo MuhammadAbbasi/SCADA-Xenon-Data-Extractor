@@ -138,7 +138,7 @@ COORDS_FILE_SAVE_DIALOG_CLOSE_BUTTON = (867, 588)
 
 # Time to wait between actions
 DELAY_ACTION = 1.0
-DELAY_LOAD_DATA = 80
+DELAY_LOAD_DATA = 90
 DELAY_SAVE_FILE = 80
 DELAY_CLOSE_SAVE = 20
 
@@ -837,23 +837,101 @@ def get_first_run_target():
     return target_date, target_hour
 
 
+def parse_date_string(date_str):
+    """
+    Parses date string in formats: YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY, YYYY/MM/DD.
+    Returns datetime.date object.
+    """
+    if not date_str:
+        return None
+    date_str = str(date_str).strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d"):
+        try:
+            return datetime.datetime.strptime(date_str, fmt).date()
+        except ValueError:
+            pass
+    raise ValueError(f"Formato data non valido '{date_str}'. Formati accettati: YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY.")
+
+
+def parse_time_string(time_str):
+    """
+    Parses time string in formats: HH, HH:MM, integer string.
+    Returns integer hour (0-23).
+    """
+    if time_str is None:
+        return None
+    time_str = str(time_str).strip()
+    if ":" in time_str:
+        parts = time_str.split(":")
+        hour = int(parts[0])
+    else:
+        hour = int(time_str)
+    if not (0 <= hour <= 23):
+        raise ValueError(f"Ora non valida '{time_str}'. L'ora deve essere compresa tra 0 e 23.")
+    return hour
+
+
+def generate_target_hours(start_date, start_hour=0, end_date=None, end_hour=23):
+    """
+    Generate list of (date, hour) tuples between start and end date/time (inclusive).
+    If end_date is None, defaults to start_date (single day mode).
+    """
+    if end_date is None:
+        end_date = start_date
+    if start_hour is None:
+        start_hour = 0
+    if end_hour is None:
+        end_hour = 23
+
+    start_dt = datetime.datetime(start_date.year, start_date.month, start_date.day, start_hour)
+    end_dt = datetime.datetime(end_date.year, end_date.month, end_date.day, end_hour)
+
+    if end_dt < start_dt:
+        raise ValueError(f"La data/ora di fine ({end_dt.strftime('%d/%m/%Y %H:%M')}) non può essere antecedente alla data/ora di inizio ({start_dt.strftime('%d/%m/%Y %H:%M')}).")
+
+    hours_list = []
+    curr_dt = start_dt
+    while curr_dt <= end_dt:
+        hours_list.append((curr_dt.date(), curr_dt.hour))
+        curr_dt += datetime.timedelta(hours=1)
+
+    return hours_list
+
+
+def generate_backfill_hours(start_date, start_hour):
+    """Legacy helper: generate hours from start_date:start_hour up to now."""
+    now = datetime.datetime.now()
+    if now.hour == 0:
+        end_date = now.date() - datetime.timedelta(days=1)
+        end_hour = 23
+    else:
+        end_date = now.date()
+        end_hour = now.hour - 1
+
+    start_dt = datetime.datetime(start_date.year, start_date.month, start_date.day, start_hour)
+    end_dt = datetime.datetime(end_date.year, end_date.month, end_date.day, end_hour)
+    if start_dt > end_dt:
+        return []
+    return generate_target_hours(start_date, start_hour, end_date, end_hour)
+
+
 def show_time_selection_dialog():
     """
-    Show an Italian dialog to select the starting date and hour for backfill.
-    Returns a tuple (start_date, start_hour) or (None, None) if cancelled.
+    Show an Italian dialog to select starting & ending date/hour and mode.
+    Returns tuple: (start_date, start_hour, end_date, end_hour, continuous)
+    or (None, None, None, None, False) if cancelled.
     """
     dialog = tk.Tk()
-    dialog.title("SCADA — Estrazione Dati")
+    dialog.title("SCADA — Estrazione Dati Intervallo")
     dialog.resizable(False, False)
 
-    # Centre on screen
-    DW, DH = 460, 470
+    DW, DH = 520, 620
     sw = dialog.winfo_screenwidth()
     sh = dialog.winfo_screenheight()
     dialog.geometry(f"{DW}x{DH}+{(sw - DW)//2}+{(sh - DH)//2}")
     dialog.configure(bg=_C['bg'])
 
-    result = [None, None]
+    result = [None, None, None, None, False]
 
     # ── Header bar ─────────────────────────────────────────────────────────────
     header = tk.Frame(dialog, bg=_C['accent'], height=54)
@@ -866,107 +944,202 @@ def show_time_selection_dialog():
 
     # ── Body ───────────────────────────────────────────────────────────────────
     body = tk.Frame(dialog, bg=_C['bg'])
-    body.pack(fill='both', expand=True, padx=24, pady=16)
+    body.pack(fill='both', expand=True, padx=20, pady=12)
 
-    def section_label(parent, text):
-        tk.Label(
-            parent, text=text,
-            font=('Segoe UI', 9, 'bold'), fg='#aaaaaa', bg=_C['bg'], anchor='w'
-        ).pack(fill='x', pady=(10, 2))
-
-    # ── Date picker ────────────────────────────────────────────────────────────
-    section_label(body, "DATA DI INIZIO")
-    date_frame = tk.Frame(body, bg=_C['panel'], bd=0, relief='flat')
-    date_frame.pack(fill='x', ipady=4)
     today = datetime.date.today()
-    date_entry = DateEntry(
-        date_frame, width=22,
+
+    # ── START DATE & HOUR ROW ──────────────────────────────────────────────────
+    start_box = tk.LabelFrame(body, text=" INIZIO INTERVALLO ", font=('Segoe UI', 9, 'bold'),
+                              fg=_C['yellow'], bg=_C['bg'], bd=1, relief='solid')
+    start_box.pack(fill='x', pady=4, ipadx=6, ipady=6)
+
+    # Start Date
+    s_date_frame = tk.Frame(start_box, bg=_C['bg'])
+    s_date_frame.pack(side='left', padx=10)
+    tk.Label(s_date_frame, text="Data Inizio:", font=('Segoe UI', 8), fg=_C['white'], bg=_C['bg']).pack(anchor='w')
+    start_date_entry = DateEntry(
+        s_date_frame, width=14,
         background=_C['accent'], foreground=_C['white'],
         selectbackground=_C['green'], selectforeground='black',
         normalbackground='white', normalforeground='#111111',
         headersbackground=_C['accent'], headersforeground=_C['white'],
         weekendbackground='white', weekendforeground='#cc2222',
         othermonthbackground='#f0f0f0', othermonthforeground='#999999',
-        borderwidth=0, font=('Segoe UI', 11),
+        borderwidth=0, font=('Segoe UI', 10),
         year=today.year, month=today.month, day=today.day,
         date_pattern='dd/mm/yyyy', locale='it_IT'
     )
-    date_entry.pack(padx=8, pady=4)
+    start_date_entry.pack(pady=2)
 
-    # ── Hour picker ────────────────────────────────────────────────────────────
-    section_label(body, "ORA DI INIZIO  (0 – 23)")
+    # Start Hour
+    s_hour_frame = tk.Frame(start_box, bg=_C['bg'])
+    s_hour_frame.pack(side='right', padx=10)
+    tk.Label(s_hour_frame, text="Ora Inizio:", font=('Segoe UI', 8), fg=_C['white'], bg=_C['bg']).pack(anchor='w')
+    start_hour_var = tk.IntVar(value=0)
 
-    hour_frame = tk.Frame(body, bg=_C['panel'])
-    hour_frame.pack(fill='x', ipady=4)
+    sh_ctrl = tk.Frame(s_hour_frame, bg=_C['panel'])
+    sh_ctrl.pack(pady=2)
 
-    hour_var = tk.IntVar(value=0)
-
-    def _dec():
-        v = hour_var.get()
-        if v > 0:
-            hour_var.set(v - 1)
-            _refresh_hour()
-
-    def _inc():
-        v = hour_var.get()
-        if v < 23:
-            hour_var.set(v + 1)
-            _refresh_hour()
-
-    def _refresh_hour():
-        hour_display.configure(text=f"{hour_var.get():02d}:00")
-
-    btn_style = dict(font=('Segoe UI', 14, 'bold'), fg=_C['white'],
+    btn_style = dict(font=('Segoe UI', 11, 'bold'), fg=_C['white'],
                      bg=_C['accent'], activebackground=_C['green'],
-                     activeforeground='black', bd=0, width=3, cursor='hand2')
+                     activeforeground='black', bd=0, width=2, cursor='hand2')
 
-    btn_minus = tk.Button(hour_frame, text="−", command=_dec, **btn_style)
-    btn_minus.pack(side='left', padx=(8, 4), pady=4)
+    def _dec_sh():
+        if start_hour_var.get() > 0:
+            start_hour_var.set(start_hour_var.get() - 1)
+            _update_total()
 
-    hour_display = tk.Label(
-        hour_frame, text="00:00",
-        font=('Segoe UI', 16, 'bold'), fg=_C['yellow'], bg=_C['panel'], width=6
+    def _inc_sh():
+        if start_hour_var.get() < 23:
+            start_hour_var.set(start_hour_var.get() + 1)
+            _update_total()
+
+    tk.Button(sh_ctrl, text="−", command=_dec_sh, **btn_style).pack(side='left')
+    sh_disp = tk.Label(sh_ctrl, text="00:00", font=('Segoe UI', 11, 'bold'),
+                       fg=_C['yellow'], bg=_C['panel'], width=5)
+    sh_disp.pack(side='left', padx=2)
+    tk.Button(sh_ctrl, text="+", command=_inc_sh, **btn_style).pack(side='left')
+
+    # ── END DATE & HOUR ROW ────────────────────────────────────────────────────
+    end_box = tk.LabelFrame(body, text=" FINE INTERVALLO ", font=('Segoe UI', 9, 'bold'),
+                            fg=_C['yellow'], bg=_C['bg'], bd=1, relief='solid')
+    end_box.pack(fill='x', pady=4, ipadx=6, ipady=6)
+
+    # End Date
+    e_date_frame = tk.Frame(end_box, bg=_C['bg'])
+    e_date_frame.pack(side='left', padx=10)
+    tk.Label(e_date_frame, text="Data Fine:", font=('Segoe UI', 8), fg=_C['white'], bg=_C['bg']).pack(anchor='w')
+    end_date_entry = DateEntry(
+        e_date_frame, width=14,
+        background=_C['accent'], foreground=_C['white'],
+        selectbackground=_C['green'], selectforeground='black',
+        normalbackground='white', normalforeground='#111111',
+        headersbackground=_C['accent'], headersforeground=_C['white'],
+        weekendbackground='white', weekendforeground='#cc2222',
+        othermonthbackground='#f0f0f0', othermonthforeground='#999999',
+        borderwidth=0, font=('Segoe UI', 10),
+        year=today.year, month=today.month, day=today.day,
+        date_pattern='dd/mm/yyyy', locale='it_IT'
     )
-    hour_display.pack(side='left', padx=4)
+    end_date_entry.pack(pady=2)
 
-    btn_plus = tk.Button(hour_frame, text="+", command=_inc, **btn_style)
-    btn_plus.pack(side='left', padx=(4, 8), pady=4)
+    # End Hour
+    e_hour_frame = tk.Frame(end_box, bg=_C['bg'])
+    e_hour_frame.pack(side='right', padx=10)
+    tk.Label(e_hour_frame, text="Ora Fine:", font=('Segoe UI', 8), fg=_C['white'], bg=_C['bg']).pack(anchor='w')
+    end_hour_var = tk.IntVar(value=23)
 
-    # ── Info box ───────────────────────────────────────────────────────────────
-    info_frame = tk.Frame(body, bg='#0d2137', bd=0)
-    info_frame.pack(fill='x', pady=(14, 0))
-    tk.Label(
-        info_frame,
-        text="ℹ  Verranno estratti tutti i report dalla data/ora selezionata\n"
-             "   fino ad ora, poi l'automazione continuerà ogni ora.",
-        font=('Segoe UI', 9), fg='#88ccee', bg='#0d2137',
-        justify='left', anchor='w', wraplength=380
-    ).pack(padx=10, pady=8)
+    eh_ctrl = tk.Frame(e_hour_frame, bg=_C['panel'])
+    eh_ctrl.pack(pady=2)
 
-    # ── Error label ────────────────────────────────────────────────────────────
+    def _dec_eh():
+        if end_hour_var.get() > 0:
+            end_hour_var.set(end_hour_var.get() - 1)
+            _update_total()
+
+    def _inc_eh():
+        if end_hour_var.get() < 23:
+            end_hour_var.set(end_hour_var.get() + 1)
+            _update_total()
+
+    tk.Button(eh_ctrl, text="−", command=_dec_eh, **btn_style).pack(side='left')
+    eh_disp = tk.Label(eh_ctrl, text="23:00", font=('Segoe UI', 11, 'bold'),
+                       fg=_C['yellow'], bg=_C['panel'], width=5)
+    eh_disp.pack(side='left', padx=2)
+    tk.Button(eh_ctrl, text="+", command=_inc_eh, **btn_style).pack(side='left')
+
+    # Quick action row: Giorno Singolo button
+    quick_frame = tk.Frame(body, bg=_C['bg'])
+    quick_frame.pack(fill='x', pady=4)
+
+    def _set_single_day():
+        s_d = start_date_entry.get_date()
+        end_date_entry.set_date(s_d)
+        start_hour_var.set(0)
+        end_hour_var.set(23)
+        _update_total()
+
+    tk.Button(
+        quick_frame, text="📅  Imposta Giorno Singolo (24 ore)",
+        command=_set_single_day,
+        font=('Segoe UI', 9), fg=_C['white'], bg=_C['panel'],
+        activebackground=_C['accent'], activeforeground=_C['white'],
+        bd=0, pady=4, cursor='hand2'
+    ).pack(fill='x')
+
+    # Continuous mode checkbox
+    continuous_var = tk.BooleanVar(value=True)
+    chk_cont = tk.Checkbutton(
+        body, text="Continua automazione oraria dopo l'estrazione dell'intervallo",
+        variable=continuous_var,
+        font=('Segoe UI', 9), fg=_C['white'], bg=_C['bg'],
+        activebackground=_C['bg'], activeforeground=_C['green'],
+        selectcolor=_C['panel'], cursor='hand2'
+    )
+    chk_cont.pack(anchor='w', pady=(6, 2))
+
+    # Summary box
+    summary_frame = tk.Frame(body, bg='#0d2137', bd=0)
+    summary_frame.pack(fill='x', pady=(6, 0))
+    total_lbl = tk.Label(
+        summary_frame, text="", font=('Segoe UI', 9, 'bold'),
+        fg='#88ccee', bg='#0d2137', justify='left', anchor='w'
+    )
+    total_lbl.pack(padx=10, pady=8)
+
     error_var = tk.StringVar()
     error_label = tk.Label(body, textvariable=error_var, font=('Segoe UI', 9),
                            fg=_C['red'], bg=_C['bg'])
-    error_label.pack(pady=(6, 0))
+    error_label.pack(pady=(4, 0))
 
-    # ── Buttons ────────────────────────────────────────────────────────────────
+    def _update_total(*args):
+        sh_disp.configure(text=f"{start_hour_var.get():02d}:00")
+        eh_disp.configure(text=f"{end_hour_var.get():02d}:00")
+        try:
+            s_d = start_date_entry.get_date()
+            e_d = end_date_entry.get_date()
+            hours = generate_target_hours(s_d, start_hour_var.get(), e_d, end_hour_var.get())
+            if s_d == e_d:
+                total_lbl.configure(text=f"ℹ  Giorno singolo ({s_d.strftime('%d/%m/%Y')}): {len(hours)} report orari da scaricare.")
+            else:
+                total_lbl.configure(text=f"ℹ  Dal {s_d.strftime('%d/%m/%Y')} al {e_d.strftime('%d/%m/%Y')}: {len(hours)} report orari totali.")
+            error_var.set("")
+        except Exception as e:
+            total_lbl.configure(text="⚠ Intervallo non valido")
+            error_var.set(str(e))
+
+    start_date_entry.bind("<<DateEntrySelected>>", _update_total)
+    end_date_entry.bind("<<DateEntrySelected>>", _update_total)
+    _update_total()
+
     def on_ok():
-        result[0] = date_entry.get_date()
-        result[1] = hour_var.get()
-        dialog.destroy()
+        try:
+            s_d = start_date_entry.get_date()
+            e_d = end_date_entry.get_date()
+            s_h = start_hour_var.get()
+            e_h = end_hour_var.get()
+            generate_target_hours(s_d, s_h, e_d, e_h)
+            result[0] = s_d
+            result[1] = s_h
+            result[2] = e_d
+            result[3] = e_h
+            result[4] = continuous_var.get()
+            dialog.destroy()
+        except Exception as ex:
+            error_var.set(str(ex))
 
     def on_cancel():
         dialog.destroy()
 
     btn_frame = tk.Frame(dialog, bg=_C['bg'])
-    btn_frame.pack(fill='x', padx=24, pady=(8, 20))
+    btn_frame.pack(fill='x', padx=20, pady=(4, 16))
 
     tk.Button(
-        btn_frame, text="▶   Estrai Dati Storici e Continua",
+        btn_frame, text="▶   Avvia Estrazione Report",
         command=on_ok,
         font=('Segoe UI', 11, 'bold'), fg='black', bg=_C['green'],
         activebackground='#00ffcc', activeforeground='black',
-        bd=0, pady=11, cursor='hand2', relief='flat'
+        bd=0, pady=10, cursor='hand2', relief='flat'
     ).pack(fill='x', pady=(0, 6))
 
     tk.Button(
@@ -974,162 +1147,217 @@ def show_time_selection_dialog():
         command=on_cancel,
         font=('Segoe UI', 10), fg='#aaaaaa', bg=_C['panel'],
         activebackground='#2a2a4a', activeforeground=_C['white'],
-        bd=0, pady=8, cursor='hand2', relief='flat'
+        bd=0, pady=6, cursor='hand2', relief='flat'
     ).pack(fill='x')
 
     dialog.mainloop()
-    return result[0], result[1]
+    return result[0], result[1], result[2], result[3], result[4]
 
 
-def generate_backfill_hours(start_date, start_hour):
-    """
-    Generate a list of (date, hour) tuples from start_date:start_hour until now.
-    Returns list sorted chronologically.
-    """
-    now = datetime.datetime.now()
-    current_date = start_date
-    current_hour = start_hour
-    
-    hours_list = []
-    
-    while True:
-        # Check if we've reached "now"
-        if current_date > now.date():
-            break
-        if current_date == now.date() and current_hour >= now.hour:
-            break
-        
-        hours_list.append((current_date, current_hour))
-        
-        # Increment hour
-        current_hour += 1
-        if current_hour > 23:
-            current_hour = 0
-            current_date += datetime.timedelta(days=1)
-    
-    return hours_list
+def parse_cli_args():
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="SCADA Automation v0.8 — Estrazione automatizzata report SCADA via GUI / CLI.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Esempi di utilizzo:
+  # Giorno singolo (scarica tutte le 24 ore del 2026-08-05):
+  python scada_automation_v0.8.py -sd 2026-08-05
+
+  # Intervallo di date con ore specifiche:
+  python scada_automation_v0.8.py -sd 2026-08-01 -st 08 -ed 2026-08-05 -et 18
+
+  # Anteprima senza esecuzione (dry-run):
+  python scada_automation_v0.8.py -sd 01/08/2026 -ed 05/08/2026 --dry-run
+
+  # Modalità continua (scarica l'intervallo e continua il monitoraggio ogni ora):
+  python scada_automation_v0.8.py -sd 2026-08-05 -c
+"""
+    )
+    parser.add_argument("-sd", "--start-date", dest="start_date", help="Data di inizio (es. YYYY-MM-DD o DD/MM/YYYY)")
+    parser.add_argument("-st", "--start-time", dest="start_time", help="Ora/Orario di inizio (0-23 o HH:MM). Default: 0")
+    parser.add_argument("-ed", "--end-date", dest="end_date", help="Data di fine (es. YYYY-MM-DD o DD/MM/YYYY). Se omessa, equivale alla data di inizio (giorno singolo)")
+    parser.add_argument("-et", "--end-time", dest="end_time", help="Ora/Orario di fine (0-23 o HH:MM). Default: 23")
+    parser.add_argument("-c", "--continuous", action="store_true", help="Continua l'automazione oraria dopo l'estrazione dell'intervallo")
+    parser.add_argument("-o", "--output-dir", dest="output_dir", help="Cartella di destinazione salvataggio file (sovrascrive PATH_TO_ORI_FOLDER)")
+    parser.add_argument("--delay-load", type=int, dest="delay_load", help="Tempo di attesa caricamento dati in secondi (default: 80)")
+    parser.add_argument("--delay-save", type=int, dest="delay_save", help="Tempo di attesa salvataggio file in secondi (default: 80)")
+    parser.add_argument("--dry-run", action="store_true", help="Mostra l'elenco dei report che verrebbero scaricati ed esce senza avviare SCADA")
+    parser.add_argument("--gui", action="store_true", help="Forza l'apertura dell'interfaccia grafica (GUI) anche se sono passati parametri da riga di comando")
+
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
     pyautogui.FAILSAFE = True
+    args = parse_cli_args()
 
-    # Start the status overlay and the stop hotkey listener
-    show_overlay()
-    start_hotkey_listener()
-    print("=" * 60)
-    print("Overlay active: status panel visible while running.")
-    print("Press Ctrl+Alt+.  at any time to stop the automation.")
+    # Override configurable parameters if passed
+    if args.output_dir:
+        PATH_TO_ORI_FOLDER = os.path.normpath(args.output_dir)
+        print(f"[Config] Cartella output impostata a: {PATH_TO_ORI_FOLDER}")
+    if args.delay_load is not None:
+        DELAY_LOAD_DATA = args.delay_load
+        print(f"[Config] DELAY_LOAD_DATA impostato a: {DELAY_LOAD_DATA}s")
+    if args.delay_save is not None:
+        DELAY_SAVE_FILE = args.delay_save
+        print(f"[Config] DELAY_SAVE_FILE impostato a: {DELAY_SAVE_FILE}s")
+
+    # Determine whether to use CLI params or GUI
+    use_cli = bool(args.start_date) and not args.gui
+
+    if use_cli:
+        print("\n=== Modalità Riga di Comando (CLI) ===")
+        try:
+            start_date = parse_date_string(args.start_date)
+            start_hour = parse_time_string(args.start_time) if args.start_time is not None else 0
+
+            if args.end_date:
+                end_date = parse_date_string(args.end_date)
+            else:
+                end_date = start_date # Single day mode
+
+            end_hour = parse_time_string(args.end_time) if args.end_time is not None else 23
+            continuous_mode = args.continuous
+        except Exception as e:
+            print(f"[Errore CLI] Parametri non validi: {e}")
+            sys.exit(1)
+    else:
+        # Show GUI dialog
+        show_overlay()
+        start_hotkey_listener()
+        print("=" * 60)
+        print("Overlay attivo: pannello di stato visibile durante l'esecuzione.")
+        print("Premi Ctrl+Alt+. in qualsiasi momento per interrompere l'automazione.")
+        print("=" * 60)
+
+        current_status = "In attesa di input utente..."
+        print("\nApertura finestra di selezione date/ore...")
+        start_date, start_hour, end_date, end_hour, continuous_mode = show_time_selection_dialog()
+
+        if start_date is None or start_hour is None:
+            current_status = "Operazione annullata dall'utente"
+            print("Selezione annullata dall'utente. Uscita.")
+            sys.exit(0)
+
+    # Generate target hours list
+    try:
+        hours_to_process = generate_target_hours(start_date, start_hour, end_date, end_hour)
+    except Exception as e:
+        print(f"[Errore] Impossibile generare l'intervallo orario: {e}")
+        sys.exit(1)
+
+    print("\n" + "=" * 60)
+    print(f"Riepilogo Intervallo Dati:")
+    print(f"  Data Inizio : {start_date} ore {start_hour:02d}:00")
+    print(f"  Data Fine   : {end_date} ore {end_hour:02d}:00")
+    print(f"  Totale report orari da scaricare: {len(hours_to_process)}")
+    print(f"  Modalità continua dopo download : {'ATTIVA' if continuous_mode else 'DISATTIVA'}")
     print("=" * 60)
 
-    # Show time selection dialog
-    current_status = "In attesa di input utente..."
-    print("\nShowing time selection dialog...")
-    start_date, start_hour = show_time_selection_dialog()
-    
-    if start_date is None or start_hour is None:
-        current_status = "Operazione annullata dall'utente"
-        print("User cancelled time selection. Exiting.")
+    if args.dry_run:
+        print("\n[DRY-RUN] Report che verrebbero elaborati:")
+        for d, h in hours_to_process:
+            print(f"  - {d} {h:02d}:00")
+        print(f"[DRY-RUN] Totale: {len(hours_to_process)} report. Uscita completata.")
         sys.exit(0)
-    
-    print(f"User selected starting time: {start_date} {start_hour}:00")
-    current_status = f"Backfill from {start_date} {start_hour}:00"
+
+    # If running in CLI mode without overlay yet, start overlay & hotkey listener
+    if use_cli:
+        show_overlay()
+        start_hotkey_listener()
+        print("=" * 60)
+        print("Overlay attivo: pannello di stato visibile durante l'esecuzione.")
+        print("Premi Ctrl+Alt+. in qualsiasi momento per interrompere l'automazione.")
+        print("=" * 60)
+
+    current_status = f"Estrazione {len(hours_to_process)} report..."
+    print(f"\nAvvio elaborazione per {len(hours_to_process)} report orari...")
 
     # Initial setup
     current_status = "Configurazione iniziale..."
     if not perform_initial_setup():
         current_status = "Configurazione iniziale fallita"
-        print("Initial setup failed.")
+        print("Configurazione iniziale della finestra SCADA fallita.")
         sys.exit(1)
 
-    # Generate list of all hours to backfill
-    hours_to_process = generate_backfill_hours(start_date, start_hour)
-    print(f"\nGenerated {len(hours_to_process)} hours to backfill:")
-    for d, h in hours_to_process[:5]:  # Show first 5
-        print(f"  {d} {h}:00")
-    if len(hours_to_process) > 5:
-        print(f"  ... and {len(hours_to_process) - 5} more")
-
-    # Process all backfill hours
+    # Process all hours in specified range
     if hours_to_process:
-        print(f"\nStarting backfill extraction for {len(hours_to_process)} hours...")
-        current_status = f"Recupero storico: 0/{len(hours_to_process)}"
-        
+        current_status = f"Recupero: 0/{len(hours_to_process)}"
         success_count = 0
         for idx, (target_date, target_hour) in enumerate(hours_to_process):
             if stop_event.is_set():
-                current_status = "Recupero storico interrotto dall'utente"
-                print("Backfill stopped by user")
+                current_status = "Recupero interrotto dall'utente"
+                print("Operazione interrotta dall'utente.")
                 break
-            
-            current_status = f"Recupero: {idx + 1}/{len(hours_to_process)} — {target_date} ore {target_hour}:00"
-            
+
+            current_status = f"Recupero {idx + 1}/{len(hours_to_process)} — {target_date} ore {target_hour:02d}:00"
+
             if not ensure_scada_window_active():
                 current_status = "Impossibile attivare finestra SCADA"
-                print("Failed to activate SCADA window during backfill, stopping")
+                print("Impossibile attivare la finestra SCADA, arresto in corso.")
                 break
-            
+
             perform_scada_prep()
             if process_hourly_report(target_date, target_hour):
                 success_count += 1
                 perform_reset()
-                print("Waiting for reset animation...")
+                print("Attesa ripristino interfaccia...")
                 time.sleep(2.0)
             else:
-                current_status = f"Errore all'ora {target_hour}:00"
-                print(f"Failed to process {target_date} {target_hour}:00")
+                current_status = f"Errore report {target_date} {target_hour:02d}:00"
+                print(f"Errore durante il download del report {target_date} {target_hour:02d}:00")
                 break
-        
-        print(f"\nBackfill completed: {success_count}/{len(hours_to_process)} hours processed")
-        current_status = f"Recupero completato: {success_count}/{len(hours_to_process)} ore"
+
+        print(f"\nDownload completato: {success_count}/{len(hours_to_process)} report elaborati.")
+        current_status = f"Completato: {success_count}/{len(hours_to_process)} report"
         time.sleep(2)
     else:
-        print("No hours to backfill (start time is already past now).")
+        print("Nessun report da scaricare per l'intervallo specificato.")
 
-    # Continue with normal hourly automation indefinitely (runs across midnight)
-    print("\nStarting regular hourly automation...")
-    current_status = "Avvio automazione oraria"
+    # Continue with continuous hourly automation if requested
+    if continuous_mode and not stop_event.is_set():
+        print("\nAvvio automazione oraria continua...")
+        current_status = "Avvio automazione oraria continua"
 
-    while not stop_event.is_set():
-        next_trigger = get_next_trigger_time()
-        target_hour = (next_trigger.hour - 1) % 24
+        while not stop_event.is_set():
+            next_trigger = get_next_trigger_time()
+            target_hour = (next_trigger.hour - 1) % 24
 
-        wait_seconds = (next_trigger - datetime.datetime.now()).total_seconds()
-        if wait_seconds > 0:
-            current_status = f"In attesa fino alle {next_trigger.strftime('%H:%M')} per ora {target_hour}:00"
-            print(f"Waiting until {next_trigger} to download for hour {target_hour}:00")
-            interruptible_sleep(wait_seconds)
+            wait_seconds = (next_trigger - datetime.datetime.now()).total_seconds()
+            if wait_seconds > 0:
+                current_status = f"In attesa fino alle {next_trigger.strftime('%H:%M')} per ora {target_hour:02d}:00"
+                print(f"In attesa fino alle {next_trigger.strftime('%H:%M')} per ora {target_hour:02d}:00")
+                interruptible_sleep(wait_seconds)
 
-        if stop_event.is_set():
-            current_status = "Automazione interrotta dall'utente"
-            break
+            if stop_event.is_set():
+                current_status = "Automazione interrotta dall'utente"
+                break
 
-        # Calculate target_date AFTER sleeping so midnight crossings resolve correctly:
-        # if next_trigger was 00:05 we are now past midnight, now.date() is already the new day,
-        # and the report we want is for hour 23 of the day that just ended (yesterday).
-        now = datetime.datetime.now()
-        if next_trigger.hour == 0:
-            target_date = now.date() - datetime.timedelta(days=1)
-        else:
-            target_date = now.date()
+            now = datetime.datetime.now()
+            if next_trigger.hour == 0:
+                target_date = now.date() - datetime.timedelta(days=1)
+            else:
+                target_date = now.date()
 
-        print(f"Downloading report for {target_date} {target_hour}:00")
-        current_status = f"Download report ore {target_hour}:00"
-        if not ensure_scada_window_active():
-            current_status = "Impossibile attivare finestra SCADA"
-            print("Failed to activate SCADA window, stopping")
-            break
-        perform_scada_prep()
-        success = process_hourly_report(target_date, target_hour)
-        if success:
-            current_status = "Reset interfaccia..."
-            perform_reset()
-            print("Waiting for reset animation...")
-            time.sleep(2.0)
-            current_status = "Pronto per il prossimo report"
-        else:
-            current_status = "Download report fallito"
-            print("Failed to download, stopping")
-            break
+            print(f"Download report automatico per {target_date} {target_hour:02d}:00")
+            current_status = f"Download report {target_date} {target_hour:02d}:00"
+            if not ensure_scada_window_active():
+                current_status = "Impossibile attivare finestra SCADA"
+                print("Impossibile attivare la finestra SCADA, arresto in corso.")
+                break
+            perform_scada_prep()
+            success = process_hourly_report(target_date, target_hour)
+            if success:
+                current_status = "Reset interfaccia..."
+                perform_reset()
+                print("Attesa ripristino interfaccia...")
+                time.sleep(2.0)
+                current_status = "Pronto per il prossimo report"
+            else:
+                current_status = "Download report fallito"
+                print("Download report automatico fallito, arresto in corso.")
+                break
 
     current_status = "Automazione completata"
-    print("Automation completed.")
+    print("Automazione completata.")
