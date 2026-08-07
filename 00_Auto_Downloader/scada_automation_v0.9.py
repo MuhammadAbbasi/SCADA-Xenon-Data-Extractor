@@ -24,7 +24,11 @@ stop_event = threading.Event()
 # --- Configuration ---
 # PATHS & DELAYS (User to configure these if needed)
 PATH_TO_ORI_FOLDER = r"//S01/get/2025.01 Mazara 01 A2A/03 - REPORT/Report/04 Tracker report/01_Original_files" # Placeholder path
-ASSETS_DIR = "assets"
+if getattr(sys, 'frozen', False):
+    BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(sys.executable)))
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 
 # WINDOW
 SCADA_WINDOW_TITLE_PARTIAL = "SCADA Web Client Starter"
@@ -859,14 +863,33 @@ def process_hourly_report(target_date, target_hour):
     # Polled wait: check for file creation on disk up to DELAY_SAVE_FILE seconds
     deadline = time.time() + DELAY_SAVE_FILE
     file_saved = False
+    reached_500mb = False
+
     while time.time() < deadline and not stop_event.is_set():
-        if (os.path.exists(full_path) and os.path.getsize(full_path) > 0) or \
-           os.path.exists(os.path.join(PATH_TO_ORI_FOLDER, filename)):
-            print(f"✓ File save confirmed: {filename}")
-            file_saved = True
-            time.sleep(1.0)
-            break
-        time.sleep(0.5)
+        target_check = full_path if os.path.exists(full_path) else os.path.join(PATH_TO_ORI_FOLDER, filename)
+        if os.path.exists(target_check):
+            size_bytes = os.path.getsize(target_check)
+            size_mb = size_bytes / (1024 * 1024)
+
+            # Check if file has reached > 500 MB (500 * 1024 * 1024 bytes)
+            if size_bytes >= 500 * 1024 * 1024:
+                print(f"✓ File '{filename}' size reached {size_mb:.1f} MB (exceeds 500MB threshold).")
+                current_status = f"File > 500MB ({size_mb:.0f}MB): Attesa 15s fine scrittura..."
+                print("Waiting 15 seconds more for file write completion before starting next file...")
+                interruptible_sleep(15)
+                file_saved = True
+                reached_500mb = True
+                break
+
+            elif size_bytes > 0:
+                print(f"  [Salvataggio] File size currently {size_mb:.1f} MB...")
+                file_saved = True
+
+        time.sleep(2.0)
+
+    if file_saved and not reached_500mb:
+        print(f"✓ File save confirmed: {filename}")
+        time.sleep(2.0)
 
     # Ensure file is at target full_path
     if not os.path.exists(full_path):
