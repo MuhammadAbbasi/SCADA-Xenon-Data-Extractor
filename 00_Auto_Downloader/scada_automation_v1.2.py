@@ -1403,6 +1403,12 @@ def show_time_selection_dialog():
     """
     dialog = tk.Tk()
     dialog.title(f"SCADA v{__version__} — Estrazione Dati Intervallo")
+    icon_p = os.path.join(ASSETS_DIR, "icon.ico")
+    if os.path.exists(icon_p):
+        try:
+            dialog.iconbitmap(icon_p)
+        except Exception:
+            pass
     dialog.resizable(False, False)
 
     DW, DH = 530, 660

@@ -18,8 +18,9 @@ except ImportError:
     KEYBOARD_AVAILABLE = False
 #\\S01\get\2025.01 Mazara 01 A2A\03 - REPORT\Report\04 Tracker report\01_Original_files\2026\02
 
-# --- Global stop flag (set by Ctrl+Alt+. hotkey) ---
+# --- Global stop and skip flags ---
 stop_event = threading.Event()
+skip_wait_event = threading.Event()
 
 # --- Configuration ---
 # PATHS & DELAYS (User to configure these if needed)
@@ -140,8 +141,15 @@ COORDS_FILE_SAVE_DIALOG_CLOSE_BUTTON = (867, 588)
 # Time to wait between actions
 DELAY_ACTION = 1.0
 DELAY_LOAD_DATA = 90
-DELAY_SAVE_FILE = 80
+DELAY_SAVE_FILE = 600
 DELAY_CLOSE_SAVE = 20
+
+# File size and download completion configuration
+EXPECTED_FILE_SIZE_MB = 530           # Usually tracker report is around ~530MB (520-550MB)
+MIN_FILE_SIZE_THRESHOLD_MB = 480      # Lower threshold to consider file in target completed range
+STABLE_CHECK_SECONDS = 15             # Seconds size must remain identical to confirm write completion
+SAVE_MAX_IDLE_TIMEOUT = 600           # Max seconds of NO size increase before declaring timeout
+DELAY_POST_SAVE = 7.0                 # Seconds to wait after saving file before next action
 
 # ---------------------------------------------------------------------------
 # Screen border overlay + Ctrl+Alt+. stop hotkey
@@ -170,7 +178,7 @@ def _overlay_worker():
         root.attributes('-topmost', True)
         root.attributes('-alpha', 0.93)
 
-        OW, OH = 420, 90
+        OW, OH = 520, 125
         sw = root.winfo_screenwidth()
         root.geometry(f"{OW}x{OH}+{sw - OW - 20}+20")
         root.configure(bg=_C['bg'])
@@ -197,20 +205,37 @@ def _overlay_worker():
         )
         status_dot_label.pack(side='right', pady=4, padx=8)
 
-        # Status text
+        # Status text & Avanti button row
+        status_frame = tk.Frame(inner, bg=_C['panel'])
+        status_frame.pack(fill='x', padx=8, pady=(4, 4))
+
         status_var = tk.StringVar(value=current_status)
         task_label = tk.Label(
-            inner, textvariable=status_var,
+            status_frame, textvariable=status_var,
             font=('Segoe UI', 9), fg=_C['yellow'], bg=_C['panel'],
-            wraplength=400, justify='left', anchor='w'
+            wraplength=385, justify='left', anchor='w'
         )
-        task_label.pack(fill='x', padx=10, pady=(6, 2))
+        task_label.pack(side='left', fill='both', expand=True)
+
+        def on_avanti_click():
+            global current_status
+            print("\n[AVANTI] Pulsante Avanti premuto — passaggio al passo successivo...")
+            skip_wait_event.set()
+
+        avanti_btn = tk.Button(
+            status_frame, text="Avanti ⏩",
+            font=('Segoe UI', 9, 'bold'), fg='#ffffff', bg=_C['accent'],
+            activebackground='#15557d', activeforeground='#ffffff',
+            bd=0, relief='flat', cursor='hand2', padx=8, pady=3,
+            command=on_avanti_click
+        )
+        avanti_btn.pack(side='right', padx=(4, 0))
 
         # Hint row
         tk.Label(
             inner, text="Premi Ctrl+Alt+.  per interrompere",
-            font=('Segoe UI', 7), fg='#888888', bg=_C['panel'], anchor='w'
-        ).pack(fill='x', padx=10, pady=(0, 4))
+            font=('Segoe UI', 8), fg='#888888', bg=_C['panel'], anchor='w'
+        ).pack(fill='x', padx=10, pady=(2, 6))
 
         # Pulsing dot in title
         _tick = [0]
@@ -261,14 +286,72 @@ def start_hotkey_listener():
     print("[Hotkey] Ctrl+Alt+. registered. Press it at any time to stop.")
 
 
-def interruptible_sleep(seconds, check_interval=0.5):
-    """Like time.sleep() but wakes every check_interval seconds to honour stop_event."""
+def interruptible_sleep(seconds, check_interval=0.2):
+    """Like time.sleep() but wakes every check_interval seconds to honour stop_event or skip_wait_event."""
     deadline = time.time() + seconds
     while not stop_event.is_set():
+        if skip_wait_event.is_set():
+            skip_wait_event.clear()
+            print("\n[AVANTI] Skip attesa eseguito — passaggio al passo successivo!")
+            break
         remaining = deadline - time.time()
         if remaining <= 0:
             break
         time.sleep(min(check_interval, remaining))
+
+
+def ensure_directory_exists(dir_path):
+    """
+    Ensures a directory (including SMB network shares) exists.
+    Handles Windows network share quirks where os.makedirs can raise WinError 183
+    or os.path.isdir fails to inspect uncached network folders immediately.
+    """
+    dir_path = os.path.normpath(dir_path)
+    if os.path.exists(dir_path) and os.path.isdir(dir_path):
+        return True
+
+    # 1. Standard os.makedirs
+    try:
+        os.makedirs(dir_path, exist_ok=True)
+    except Exception:
+        pass
+
+    if os.path.exists(dir_path):
+        return True
+
+    # 2. Component iteration fallback ignoring WinError 183 / EEXIST
+    try:
+        parts = []
+        curr = dir_path
+        while curr and curr != os.path.dirname(curr):
+            parts.append(curr)
+            curr = os.path.dirname(curr)
+        parts.reverse()
+
+        for p in parts:
+            if not os.path.exists(p):
+                try:
+                    os.mkdir(p)
+                except OSError as err:
+                    if getattr(err, 'winerror', None) == 183 or getattr(err, 'errno', None) == 17:
+                        pass
+                    else:
+                        print(f"[DirCheck] Component notice on {p}: {err}")
+    except Exception as ex:
+        print(f"[DirCheck] Component creation fallback failed: {ex}")
+
+    if os.path.exists(dir_path):
+        return True
+
+    # 3. PowerShell fallback for network shares
+    try:
+        import subprocess
+        ps_cmd = f'if (!(Test-Path -Path "{dir_path}")) {{ New-Item -ItemType Directory -Path "{dir_path}" -Force }}'
+        subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], capture_output=True, timeout=10)
+    except Exception as ps_err:
+        print(f"[DirCheck] PowerShell fallback error: {ps_err}")
+
+    return os.path.exists(dir_path)
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +521,7 @@ def get_date_override_coords(target_date):
 def check_color_is_black_bg_white_text(x, y):
     """Verify the clicked position has the expected color (for debugging)."""
     try:
+        x, y = int(x), int(y)
         # Capture a small region around the click point
         region = (x-5, y-5, 10, 10)  # 10x10 pixel region
         screenshot = pyautogui.screenshot(region=region)
@@ -554,14 +638,43 @@ def get_date_grid_coords(target_date):
     return (int(x), int(y))
 
 
+def is_file_locked(file_path):
+    """
+    Checks if a file is currently locked or being written to by another process.
+    Returns True if locked/inaccessible for read-write access, False otherwise.
+    """
+    if not os.path.exists(file_path):
+        return True
+    try:
+        with open(file_path, 'r+b'):
+            return False
+    except (PermissionError, OSError):
+        return True
+
+
 def validate_existing_csv(file_path, target_date, target_hour):
     """
-    Validates if an existing CSV file is non-empty and contains data matching target_date and target_hour.
+    Validates if an existing CSV file is non-empty, has expected size (~530MB),
+    and contains data matching target_date and target_hour.
     Returns True if valid and correct, False otherwise.
     """
     if not os.path.exists(file_path):
         return False
-    if os.path.getsize(file_path) == 0:
+    try:
+        size_bytes = os.path.getsize(file_path)
+    except OSError:
+        return False
+
+    if size_bytes == 0:
+        return False
+
+    size_mb = size_bytes / (1024 * 1024)
+    if size_mb < MIN_FILE_SIZE_THRESHOLD_MB:
+        print(f"  [Validazione] File '{os.path.basename(file_path)}' dimensione insufficiente ({size_mb:.1f} MB < {MIN_FILE_SIZE_THRESHOLD_MB} MB, atteso ~{EXPECTED_FILE_SIZE_MB} MB).")
+        return False
+
+    if is_file_locked(file_path):
+        print(f"  [Validazione] File '{os.path.basename(file_path)}' è attualmente in uso/scrittura da un altro processo.")
         return False
 
     expected_date_str1 = target_date.strftime("%d/%m/%Y") # e.g. 01/08/2026
@@ -709,7 +822,7 @@ def process_hourly_report(target_date, target_hour):
             if all_matches:
                 selected_match = select_best_date_match(all_matches, target_date)
                 if selected_match:
-                    pos = pyautogui.Point(selected_match[0], selected_match[1])
+                    pos = pyautogui.Point(int(selected_match[0]), int(selected_match[1]))
                     expected_x, expected_y = get_date_grid_coords(target_date)
                     distance = ((selected_match[0] - expected_x)**2 + (selected_match[1] - expected_y)**2) ** 0.5
                     print(f"Selected best match near expected grid ({expected_x},{expected_y}), distance={distance:.1f}, confidence={selected_match[2]:.2f}")
@@ -839,12 +952,8 @@ def process_hourly_report(target_date, target_hour):
     
     # Ensure directory exists
     dir_path = os.path.dirname(full_path)
-    if not os.path.exists(dir_path):
-        print(f"Creating directory: {dir_path}")
-        try:
-            os.makedirs(dir_path, exist_ok=True)
-        except Exception as e:
-            print(f"Error creating directory {dir_path}: {e}")
+    if not ensure_directory_exists(dir_path):
+        print(f"[WARN] Creazione cartella fallita o non confermata: {dir_path}")
 
     # Write full absolute path to save file directly into target folder
     pyautogui.write(full_path, interval=0.01)
@@ -852,7 +961,7 @@ def process_hourly_report(target_date, target_hour):
     time.sleep(1.0)
 
     print("=== Step 18: Save and Wait ===")
-    current_status = f"Salvataggio..."
+    current_status = f"Salvataggio {filename}..."
     pyautogui.click(COORDS_FILE_SAVE_DIALOG_SAVE_BUTTON)
     time.sleep(0.5)
 
@@ -860,36 +969,125 @@ def process_hourly_report(target_date, target_hour):
     pyautogui.press('y')
     pyautogui.press('enter')
 
-    # Polled wait: check for file creation on disk up to DELAY_SAVE_FILE seconds
-    deadline = time.time() + DELAY_SAVE_FILE
+    # Continuous file size check until download completes (~530MB)
     file_saved = False
-    reached_500mb = False
+    target_check = full_path
 
-    while time.time() < deadline and not stop_event.is_set():
+    # Phase 1: Wait for file to appear on disk (up to 60 seconds)
+    file_detected = False
+    wait_create_start = time.time()
+    while time.time() - wait_create_start < 60 and not stop_event.is_set():
+        if skip_wait_event.is_set():
+            skip_wait_event.clear()
+            print("\n[AVANTI] Skip attesa creazione file eseguito!")
+            file_saved = True
+            break
+
         target_check = full_path if os.path.exists(full_path) else os.path.join(PATH_TO_ORI_FOLDER, filename)
         if os.path.exists(target_check):
-            size_bytes = os.path.getsize(target_check)
-            size_mb = size_bytes / (1024 * 1024)
+            file_detected = True
+            break
 
-            # Check if file has reached > 500 MB (500 * 1024 * 1024 bytes)
-            if size_bytes >= 500 * 1024 * 1024:
-                print(f"✓ File '{filename}' size reached {size_mb:.1f} MB (exceeds 500MB threshold).")
-                current_status = f"File > 500MB ({size_mb:.0f}MB): Attesa 15s fine scrittura..."
-                print("Waiting 15 seconds more for file write completion before starting next file...")
-                interruptible_sleep(15)
+        elapsed_detect = time.time() - wait_create_start
+        # If overwrite dialog appeared late, re-send confirm keys
+        if 4.0 <= elapsed_detect <= 5.0 or 12.0 <= elapsed_detect <= 13.0:
+            pyautogui.press('y')
+            pyautogui.press('enter')
+
+        current_status = f"Attesa creazione {filename}... ({int(elapsed_detect)}s)"
+        for _ in range(5):
+            if skip_wait_event.is_set() or stop_event.is_set():
+                break
+            time.sleep(0.2)
+
+    if not file_detected and not file_saved:
+        print(f"[WARN] File '{filename}' non ancora rilevato su disco dopo 60s. Continuo il monitoraggio...")
+
+    # Phase 2: Continuously monitor file size until download is complete
+    if not file_saved:
+        last_change_time = time.time()
+        last_size = -1
+        last_log_time = 0
+
+        while not stop_event.is_set():
+            if skip_wait_event.is_set():
+                skip_wait_event.clear()
+                print("\n[AVANTI] Skip attesa salvataggio eseguito — passaggio al passo successivo!")
                 file_saved = True
-                reached_500mb = True
                 break
 
-            elif size_bytes > 0:
-                print(f"  [Salvataggio] File size currently {size_mb:.1f} MB...")
-                file_saved = True
+            target_check = full_path if os.path.exists(full_path) else os.path.join(PATH_TO_ORI_FOLDER, filename)
+            if not os.path.exists(target_check):
+                time.sleep(1.0)
+                continue
 
-        time.sleep(2.0)
+            try:
+                current_size = os.path.getsize(target_check)
+            except OSError:
+                current_size = last_size if last_size >= 0 else 0
 
-    if file_saved and not reached_500mb:
-        print(f"✓ File save confirmed: {filename}")
-        time.sleep(2.0)
+            size_mb = current_size / (1024 * 1024)
+            now_ts = time.time()
+
+            if current_size > last_size:
+                # File is actively growing (downloading/writing)
+                delta_str = ""
+                if last_size >= 0:
+                    delta_mb = (current_size - last_size) / (1024 * 1024)
+                    delta_str = f" (+{delta_mb:.1f} MB)"
+
+                last_size = current_size
+                last_change_time = now_ts
+
+                if now_ts - last_log_time >= 2.0:
+                    print(f"  [Salvataggio] File size currently {size_mb:.1f} MB{delta_str} / ~{EXPECTED_FILE_SIZE_MB} MB...")
+                    last_log_time = now_ts
+
+                current_status = f"Scrittura {filename}: {size_mb:.1f} MB / ~{EXPECTED_FILE_SIZE_MB} MB"
+
+            else:
+                # File size has not changed since last check
+                stable_seconds = now_ts - last_change_time
+                current_status = f"Scrittura {filename}: {size_mb:.1f} MB (stabile da {int(stable_seconds)}s)"
+
+                # Condition A: Reached expected target size (~530MB, threshold >= 480MB) and stable
+                if size_mb >= MIN_FILE_SIZE_THRESHOLD_MB:
+                    if stable_seconds >= STABLE_CHECK_SECONDS:
+                        if not is_file_locked(target_check):
+                            print(f"✓ File '{filename}' download completato con successo! Dimensione finale: {size_mb:.1f} MB (stabile da {int(stable_seconds)}s).")
+                            current_status = f"Download completato: {filename} ({size_mb:.0f} MB)"
+                            file_saved = True
+                            break
+                        else:
+                            if now_ts - last_log_time >= 3.0:
+                                print(f"  [Salvataggio] Dimensione target {size_mb:.1f} MB raggiunta. Attesa chiusura file handle SCADA...")
+                                last_log_time = now_ts
+
+                # Condition B: File stopped growing below expected threshold (< 480MB)
+                else:
+                    if stable_seconds >= 60 and not is_file_locked(target_check):
+                        print(f"⚠ File '{filename}' scrittura terminata a {size_mb:.1f} MB (inferiore ai consueti ~{EXPECTED_FILE_SIZE_MB} MB, stabile da {int(stable_seconds)}s).")
+                        current_status = f"Salvataggio terminato: {filename} ({size_mb:.0f} MB)"
+                        file_saved = True
+                        break
+                    elif stable_seconds >= SAVE_MAX_IDLE_TIMEOUT:
+                        print(f"[WARN] Timeout salvataggio: nessun incremento per {int(stable_seconds)}s. File fermo a {size_mb:.1f} MB.")
+                        file_saved = True
+                        break
+                    else:
+                        if now_ts - last_log_time >= 5.0:
+                            print(f"  [Salvataggio] File size {size_mb:.1f} MB (stabile da {int(stable_seconds)}s, attesa ~{EXPECTED_FILE_SIZE_MB} MB)...")
+                            last_log_time = now_ts
+
+            # Polling delay: 2.0s with responsive stop/skip checks
+            for _ in range(10):
+                if skip_wait_event.is_set() or stop_event.is_set():
+                    break
+                time.sleep(0.2)
+
+    if not file_saved and stop_event.is_set():
+        print(f"[STOP] Salvataggio interrotto dall'utente per {target_hour}:00.")
+        return False
 
     # Ensure file is at target full_path
     if not os.path.exists(full_path):
@@ -898,11 +1096,14 @@ def process_hourly_report(target_date, target_hour):
             alt_path = os.path.join(PATH_TO_ORI_FOLDER, filename)
             if os.path.exists(alt_path):
                 shutil.move(alt_path, full_path)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[WARN] Errore spostamento file da {alt_path} a {full_path}: {e}")
 
     print(f"Task Completed FOR {target_hour}:00")
-    current_status = f"Report saved for {target_hour}:00"
+    current_status = f"Report salvato per {target_hour}:00. Attesa {int(DELAY_POST_SAVE)}s..."
+    print(f"Attesa {int(DELAY_POST_SAVE)} secondi dopo il salvataggio prima del passo successivo...")
+    interruptible_sleep(DELAY_POST_SAVE)
+    current_status = f"Report salvato per {target_hour}:00"
     return True
 
 def get_next_trigger_time():
@@ -1268,7 +1469,7 @@ Esempi di utilizzo:
     parser.add_argument("-c", "--continuous", action="store_true", help="Continua l'automazione oraria dopo l'estrazione dell'intervallo")
     parser.add_argument("-o", "--output-dir", dest="output_dir", help="Cartella di destinazione salvataggio file (sovrascrive PATH_TO_ORI_FOLDER)")
     parser.add_argument("--delay-load", type=int, dest="delay_load", help="Tempo di attesa caricamento dati in secondi (default: 80)")
-    parser.add_argument("--delay-save", type=int, dest="delay_save", help="Tempo di attesa salvataggio file in secondi (default: 80)")
+    parser.add_argument("--delay-save", type=int, dest="delay_save", help="Tempo massimo di inattività salvataggio in secondi (default: 600)")
     parser.add_argument("--dry-run", action="store_true", help="Mostra l'elenco dei report che verrebbero scaricati ed esce senza avviare SCADA")
     parser.add_argument("--gui", action="store_true", help="Forza l'apertura dell'interfaccia grafica (GUI) anche se sono passati parametri da riga di comando")
 
@@ -1276,7 +1477,7 @@ Esempi di utilizzo:
 
 
 if __name__ == "__main__":
-    pyautogui.FAILSAFE = True
+    pyautogui.FAILSAFE = False
     args = parse_cli_args()
 
     # Override configurable parameters if passed
@@ -1287,8 +1488,9 @@ if __name__ == "__main__":
         DELAY_LOAD_DATA = args.delay_load
         print(f"[Config] DELAY_LOAD_DATA impostato a: {DELAY_LOAD_DATA}s")
     if args.delay_save is not None:
+        SAVE_MAX_IDLE_TIMEOUT = args.delay_save
         DELAY_SAVE_FILE = args.delay_save
-        print(f"[Config] DELAY_SAVE_FILE impostato a: {DELAY_SAVE_FILE}s")
+        print(f"[Config] SAVE_MAX_IDLE_TIMEOUT impostato a: {SAVE_MAX_IDLE_TIMEOUT}s")
 
     # Determine whether to use CLI params or GUI
     use_cli = bool(args.start_date) and not args.gui
@@ -1429,22 +1631,35 @@ if __name__ == "__main__":
 
             print(f"Download report automatico per {target_date} {target_hour:02d}:00")
             current_status = f"Download report {target_date} {target_hour:02d}:00"
-            if not ensure_scada_window_active():
-                current_status = "Impossibile attivare finestra SCADA"
-                print("Impossibile attivare la finestra SCADA, arresto in corso.")
-                break
-            perform_scada_prep()
-            success = process_hourly_report(target_date, target_hour)
-            if success:
-                current_status = "Reset interfaccia..."
-                perform_reset()
-                print("Attesa ripristino interfaccia...")
-                time.sleep(2.0)
-                current_status = "Pronto per il prossimo report"
-            else:
-                current_status = "Download report fallito"
-                print("Download report automatico fallito, arresto in corso.")
-                break
+            try:
+                if not ensure_scada_window_active():
+                    current_status = "Impossibile attivare finestra SCADA"
+                    print("[WARN] Impossibile attivare la finestra SCADA. Tentativo al prossimo ciclo.")
+                    time.sleep(5.0)
+                    continue
+                perform_scada_prep()
+                success = process_hourly_report(target_date, target_hour)
+                if success:
+                    current_status = "Reset interfaccia..."
+                    perform_reset()
+                    print("Attesa ripristino interfaccia...")
+                    time.sleep(2.0)
+                    current_status = "Pronto per il prossimo report"
+                else:
+                    current_status = "Download report fallito"
+                    print("[WARN] Download report automatico fallito. Ripristino interfaccia e attesa prossimo ciclo...")
+                    try:
+                        perform_reset()
+                    except Exception as re:
+                        print(f"[WARN] Errore durante il reset dell'interfaccia: {re}")
+            except Exception as ex:
+                print(f"[ERROR] Eccezione durante il download automatico ({target_date} {target_hour:02d}:00): {ex}")
+                current_status = f"Errore ciclo: {ex}"
+                try:
+                    perform_reset()
+                except Exception:
+                    pass
+                time.sleep(5.0)
 
     current_status = "Automazione completata"
     print("Automazione completata.")
